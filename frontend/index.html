@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Memorias de Obra - JACBEL</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#1F4E78" />
+<style>
+  :root {
+    --navy: #1F4E78;
+    --navy-dark: #163a58;
+    --bg: #F4F6F9;
+    --card: #FFFFFF;
+    --text: #1B2430;
+    --muted: #6B7686;
+    --green: #2E7D32;
+    --border: #E3E7ED;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161C;
+      --card: #1B222C;
+      --text: #EDEFF2;
+      --muted: #9AA4B2;
+      --border: #2A323D;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+  body { padding-bottom: 40px; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--navy); color: #fff;
+    padding: calc(14px + env(safe-area-inset-top)) 14px 14px; display: flex; align-items: center;
+    gap: 10px; }
+  header button { background: none; border: none; color: #fff; font-size: 22px; padding: 4px 8px;
+    width: 34px; flex-shrink: 0; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 700; line-height: 1.2; flex: 1; }
+  main { padding: 14px; max-width: 620px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; color: var(--navy); }
+  @media (prefers-color-scheme: dark) { .card h2 { color: #7FB3E0; } }
+  .empty { text-align: center; color: var(--muted); padding: 20px; font-size: 13.5px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  select, input[type="text"], input[type="number"], input[type="file"] {
+    width: 100%; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; font-size: 15px; background: var(--card); color: var(--text); font-family: inherit; }
+  .btn-primary { width: 100%; padding: 15px; border: none; border-radius: 12px;
+    background: var(--navy); color: #fff; font-weight: 700; font-size: 16px; margin-top: 6px; }
+  .btn-primary:disabled { opacity: 0.4; }
+  .btn-secondary { width: 100%; padding: 13px; border: none; border-radius: 12px;
+    background: transparent; color: var(--muted); font-weight: 600; font-size: 14px; margin-top: 8px; }
+  .status { text-align: center; font-size: 14px; color: var(--muted); margin: 10px 0; min-height: 20px; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border);
+    border-top-color: var(--navy); border-radius: 50%; animation: spin 0.7s linear infinite;
+    vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .lista-archivos { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+  .archivo-item { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 14px;
+    display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .archivo-item:last-child { border-bottom: none; }
+  .archivo-item.selected { background: var(--navy); color: #fff; }
+  .archivo-item .fecha { font-size: 11.5px; color: var(--muted); }
+  .archivo-item.selected .fecha { color: rgba(255,255,255,0.85); }
+  .obra-card { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid var(--border);
+    border-radius: 12px; margin-bottom: 10px; cursor: pointer; background: var(--card); }
+  .obra-card .nombre { font-weight: 700; font-size: 15px; }
+  .obra-card .detalle { font-size: 12.5px; color: var(--muted); }
+  .direccion-card { display: flex; justify-content: space-between; align-items: center; padding: 14px;
+    border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; cursor: pointer; }
+  .direccion-card .nombre { font-weight: 700; font-size: 14px; flex: 1; padding-right: 10px; }
+  .direccion-card .chevron { color: var(--muted); font-size: 18px; }
+  .capitulo-titulo { font-size: 12.5px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.03em; margin: 18px 4px 8px; }
+  .capitulo-titulo:first-child { margin-top: 4px; }
+  .item-row { padding: 13px 14px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px;
+    cursor: pointer; background: var(--card); }
+  .item-row .item-desc { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+  .item-row .item-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .item-row .item-progreso { font-size: 12px; font-weight: 700; }
+  .item-row .item-progreso.completo { color: var(--green); }
+  .config-fila { display: flex; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .config-fila:last-child { border-bottom: none; }
+  .config-fila .k { width: 130px; flex-shrink: 0; color: var(--muted); font-weight: 600; }
+  .config-fila .v { flex: 1; }
+  .medida-row { padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
+    display: flex; gap: 10px; align-items: flex-start; }
+  .medida-row img { width: 46px; height: 46px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+  .medida-row .info { flex: 1; font-size: 12.5px; }
+  .medida-row .info .cant { font-weight: 700; font-size: 13.5px; }
+  .medida-row .info .fecha { color: var(--muted); }
+  .medida-row .acciones { display: flex; flex-direction: column; gap: 6px; }
+  .medida-row .acciones button { background: none; border: none; font-size: 15px; padding: 2px 6px; }
+  .badge-unidad { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border-radius: 100px; background: var(--border); color: var(--text); margin-left: 6px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--navy); color: #fff; padding: 12px 20px; border-radius: 100px; font-size: 14px;
+    font-weight: 600; z-index: 30; display: none; box-shadow: 0 6px 18px rgba(0,0,0,0.3); max-width: 90vw; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <button type="button" id="btnVolver" style="visibility:hidden">‹</button>
+  <h1 id="tituloHeader">Memorias JACBEL</h1>
+  <span style="width:34px"></span>
+</header>
+
+<main>
+
+  <div class="vista" id="vistaObras">
+    <div class="card">
+      <h2>Mis obras</h2>
+      <div id="listaObras"><div class="empty">Cargando...</div></div>
+    </div>
+    <button type="button" class="btn-primary" id="btnNuevaObra">+ Nueva obra</button>
+  </div>
+
+  <div class="vista" id="vistaNuevaObra" style="display:none">
+    <div class="card">
+      <h2>1. Elegir presupuesto</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px">Carpeta "Presupuestos" dentro de "Memorias JACBEL" en Drive.</div>
+      <div id="listaPresupuestos" class="lista-archivos"><div class="empty">Cargando...</div></div>
+      <button type="button" class="btn-primary" id="btnPrevisualizar" disabled>Leer presupuesto</button>
+      <div class="status" id="statusPreview"></div>
+    </div>
+    <div class="card" id="cardPreview" style="display:none">
+      <h2>2. Confirmar</h2>
+      <div id="previewInfo"></div>
+      <div class="field">
+        <label>Nombre para esta obra</label>
+        <input type="text" id="nombreNuevaObra" placeholder="Ej: Guacarí - Contrato 080-26" />
+      </div>
+      <button type="button" class="btn-primary" id="btnCrearObra">Crear obra</button>
+    </div>
+  </div>
+
+  <div class="vista" id="vistaObraDetalle" style="display:none">
+    <div class="card" id="cardConfigObra"></div>
+    <div class="card">
+      <h2>Direcciones a intervenir</h2>
+      <div id="listaDirecciones"></div>
+    </div>
+    <button type="button" class="btn-secondary" id="btnBorrarObra" style="color:#C0392B">Eliminar esta obra</button>
+  </div>
+
+  <div class="vista" id="vistaDireccion" style="display:none">
+    <div id="listaItems"></div>
+  </div>
+
+  <div class="vista" id="vistaItem" style="display:none">
+    <div class="card" id="cardItemInfo"></div>
+    <div class="card">
+      <h2 id="tituloFormularioMedida">Nueva medida</h2>
+      <div id="camposMedida"></div>
+      <div class="field">
+        <label>Foto de la actividad (opcional)</label>
+        <input type="file" id="inputFoto" accept="image/*" capture="environment" />
+        <div id="previewFoto"></div>
+      </div>
+      <div class="field">
+        <label>Observación (opcional)</label>
+        <input type="text" id="observacionMedida" />
+      </div>
+      <div class="status" id="cantidadCalculadaTexto"></div>
+      <button type="button" class="btn-primary" id="btnGuardarMedida">Guardar medida</button>
+      <button type="button" class="btn-secondary" id="btnCancelarEdicion" style="display:none">Cancelar edición</button>
+    </div>
+    <div class="card">
+      <h2>Historial de medidas</h2>
+      <div id="listaMedidas"></div>
+    </div>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = "";
+
+let pilaNavegacion = [];
+let obrasCache = [];
+let archivoPresupuestoSeleccionado = null;
+let previewData = null;
+let obraActual = null;
+let direccionActual = null;
+let itemActual = null;
+let medidaEnEdicion = null;
+let fotoBase64Actual = null;
+let fotoTipoActual = null;
+
+const toast = document.getElementById("toast");
+function mostrarToast(msg, esError) {
+  toast.textContent = msg;
+  toast.style.background = esError ? "#C0392B" : "var(--navy)";
+  toast.style.display = "block";
+  setTimeout(() => { toast.style.display = "none"; }, 3200);
+}
+
+function formatoNumero(n) {
+  return Number(n || 0).toLocaleString("es-CO", { maximumFractionDigits: 3 });
+}
+
+// ---------- Navegacion ----------
+function mostrarVista(id) {
+  document.querySelectorAll(".vista").forEach((v) => v.style.display = "none");
+  document.getElementById(id).style.display = "block";
+}
+function navegarA(id, titulo) {
+  pilaNavegacion.push({ id, titulo });
+  mostrarVista(id);
+  document.getElementById("tituloHeader").textContent = titulo;
+  document.getElementById("btnVolver").style.visibility = pilaNavegacion.length > 1 ? "visible" : "hidden";
+}
+function reemplazarVista(id, titulo) {
+  pilaNavegacion[pilaNavegacion.length - 1] = { id, titulo };
+  mostrarVista(id);
+  document.getElementById("tituloHeader").textContent = titulo;
+}
+function volver() {
+  if (pilaNavegacion.length <= 1) return;
+  pilaNavegacion.pop();
+  const anterior = pilaNavegacion[pilaNavegacion.length - 1];
+  mostrarVista(anterior.id);
+  document.getElementById("tituloHeader").textContent = anterior.titulo;
+  document.getElementById("btnVolver").style.visibility = pilaNavegacion.length > 1 ? "visible" : "hidden";
+}
+document.getElementById("btnVolver").addEventListener("click", volver);
+
+// ---------- Vista: lista de obras ----------
+async function cargarObras() {
+  const cont = document.getElementById("listaObras");
+  cont.innerHTML = '<div class="empty"><span class="spinner"></span> Cargando...</div>';
+  try {
+    const res = await fetch(API_BASE + "/api/obras");
+    obrasCache = await res.json();
+    if (!Array.isArray(obrasCache) || !obrasCache.length) {
+      cont.innerHTML = '<div class="empty">Todavía no tienes obras. Crea la primera con "+ Nueva obra".</div>';
+      return;
+    }
+    cont.innerHTML = obrasCache.map((o) => `
+      <div class="obra-card" data-id="${o.obraId}">
+        <span class="nombre">${o.nombre}</span>
+        <span class="detalle">${o.numeroContrato ? "Contrato " + o.numeroContrato : ""}${o.contratista ? " · " + o.contratista : ""}</span>
+      </div>
+    `).join("");
+    cont.querySelectorAll(".obra-card").forEach((el) => {
+      el.addEventListener("click", () => abrirObra(el.dataset.id));
+    });
+  } catch (e) {
+    cont.innerHTML = '<div class="empty">No se pudo cargar. Revisa tu conexión.</div>';
+  }
+}
+
+function irAObras() {
+  navegarA("vistaObras", "Memorias JACBEL");
+  cargarObras();
+}
+
+document.getElementById("btnNuevaObra").addEventListener("click", () => {
+  navegarA("vistaNuevaObra", "Nueva obra");
+  document.getElementById("cardPreview").style.display = "none";
+  document.getElementById("nombreNuevaObra").value = "";
+  archivoPresupuestoSeleccionado = null;
+  previewData = null;
+  document.getElementById("btnPrevisualizar").disabled = true;
+  cargarPresupuestos();
+});
+
+// ---------- Vista: nueva obra ----------
+async function cargarPresupuestos() {
+  const cont = document.getElementById("listaPresupuestos");
+  cont.innerHTML = '<div class="empty"><span class="spinner"></span> Cargando...</div>';
+  try {
+    const res = await fetch(API_BASE + "/api/presupuestos");
+    const archivos = await res.json();
+    if (!Array.isArray(archivos) || !archivos.length) {
+      cont.innerHTML = '<div class="empty">No hay archivos en la carpeta "Presupuestos" de Drive todavía.</div>';
+      return;
+    }
+    cont.innerHTML = archivos.map((a) => `
+      <div class="archivo-item" data-id="${a.id}">
+        <span>${a.nombre}</span>
+        <span class="fecha">${new Date(a.fecha).toLocaleDateString("es-CO")}</span>
+      </div>
+    `).join("");
+    cont.querySelectorAll(".archivo-item").forEach((el) => {
+      el.addEventListener("click", () => {
+        archivoPresupuestoSeleccionado = el.dataset.id;
+        cont.querySelectorAll(".archivo-item").forEach((x) => x.classList.toggle("selected", x === el));
+        document.getElementById("btnPrevisualizar").disabled = false;
+      });
+    });
+  } catch (e) {
+    cont.innerHTML = '<div class="empty">No se pudo cargar la lista.</div>';
+  }
+}
+
+document.getElementById("btnPrevisualizar").addEventListener("click", async () => {
+  if (!archivoPresupuestoSeleccionado) return;
+  const status = document.getElementById("statusPreview");
+  status.innerHTML = '<span class="spinner"></span> Leyendo presupuesto...';
+  document.getElementById("cardPreview").style.display = "none";
+  try {
+    const res = await fetch(`${API_BASE}/api/presupuesto-preview?fileId=${encodeURIComponent(archivoPresupuestoSeleccionado)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error al leer el presupuesto");
+    previewData = data;
+    status.textContent = "";
+    renderPreview();
+    document.getElementById("cardPreview").style.display = "block";
+    const sugerido = [data.meta.numeroContrato, data.meta.objeto].filter(Boolean).join(" - ");
+    document.getElementById("nombreNuevaObra").value = sugerido.slice(0, 80);
+  } catch (err) {
+    status.textContent = "Error: " + err.message;
+  }
+});
+
+function renderPreview() {
+  const m = previewData.meta;
+  const totalItems = previewData.direcciones.reduce((s, d) => s + d.items.length, 0);
+  document.getElementById("previewInfo").innerHTML = `
+    <div class="config-fila"><span class="k">Contrato</span><span class="v">${m.numeroContrato || "-"}</span></div>
+    <div class="config-fila"><span class="k">Objeto</span><span class="v">${m.objeto || "-"}</span></div>
+    <div class="config-fila"><span class="k">Contratista</span><span class="v">${m.contratista || "-"}</span></div>
+    <div class="config-fila"><span class="k">Supervisor</span><span class="v">${m.supervisor || "-"}</span></div>
+    <div class="config-fila"><span class="k">Direcciones</span><span class="v">${previewData.direcciones.length} encontradas, ${totalItems} items en total</span></div>
+    <div style="margin-top:10px">
+      ${previewData.direcciones.map((d) => `<div style="font-size:12.5px;padding:4px 0;color:var(--muted)">• ${d.nombre} (${d.items.length} items)</div>`).join("")}
+    </div>
+  `;
+}
+
+document.getElementById("btnCrearObra").addEventListener("click", async () => {
+  const nombre = document.getElementById("nombreNuevaObra").value.trim();
+  if (!nombre) { mostrarToast("Ponle un nombre a la obra", true); return; }
+  const btn = document.getElementById("btnCrearObra");
+  btn.disabled = true;
+  btn.textContent = "Creando...";
+  try {
+    const res = await fetch(API_BASE + "/api/obras", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId: archivoPresupuestoSeleccionado, nombreObra: nombre }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al crear la obra");
+    mostrarToast("Obra creada ✓");
+    pilaNavegacion = [{ id: "vistaObras", titulo: "Memorias JACBEL" }];
+    await abrirObra(data.obraId);
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Crear obra";
+  }
+});
+
+// ---------- Vista: detalle de obra ----------
+async function abrirObra(obraId) {
+  navegarA("vistaObraDetalle", "Cargando...");
+  document.getElementById("cardConfigObra").innerHTML = '<div class="empty"><span class="spinner"></span> Cargando...</div>';
+  document.getElementById("listaDirecciones").innerHTML = "";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${encodeURIComponent(obraId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Error al cargar la obra");
+    obraActual = data;
+    reemplazarVista("vistaObraDetalle", obraActual.obra.nombre);
+    renderObraDetalle();
+  } catch (err) {
+    document.getElementById("cardConfigObra").innerHTML = `<div class="empty">Error: ${err.message}</div>`;
+  }
+}
+
+function renderObraDetalle() {
+  const o = obraActual.obra;
+  document.getElementById("cardConfigObra").innerHTML = `
+    <h2>Datos del contrato</h2>
+    <div class="config-fila"><span class="k">Contrato</span><span class="v">${o.numeroContrato || "-"}</span></div>
+    <div class="config-fila"><span class="k">Objeto</span><span class="v">${o.objeto || "-"}</span></div>
+    <div class="config-fila"><span class="k">Contratista</span><span class="v">${o.contratista || "-"}</span></div>
+    <div class="config-fila"><span class="k">Supervisor</span><span class="v">${o.supervisor || "-"}</span></div>
+  `;
+  const cont = document.getElementById("listaDirecciones");
+  if (!obraActual.direcciones.length) {
+    cont.innerHTML = '<div class="empty">Esta obra no tiene direcciones cargadas.</div>';
+    return;
+  }
+  cont.innerHTML = obraActual.direcciones.map((d, i) => `
+    <div class="direccion-card" data-idx="${i}">
+      <span class="nombre">${d.nombre}</span>
+      <span class="chevron">›</span>
+    </div>
+  `).join("");
+  cont.querySelectorAll(".direccion-card").forEach((el) => {
+    el.addEventListener("click", () => abrirDireccion(obraActual.direcciones[Number(el.dataset.idx)]));
+  });
+}
+
+document.getElementById("btnBorrarObra").addEventListener("click", async () => {
+  if (!obraActual) return;
+  if (!confirm(`¿Eliminar la obra "${obraActual.obra.nombre}" de la lista? (La hoja de Google Sheets no se borra, solo se quita de aquí)`)) return;
+  try {
+    await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}`, { method: "DELETE" });
+    mostrarToast("Obra eliminada de la lista");
+    pilaNavegacion = [];
+    irAObras();
+  } catch (e) {
+    mostrarToast("Error al eliminar", true);
+  }
+});
+
+// ---------- Vista: direccion (lista de items) ----------
+function abrirDireccion(direccion) {
+  direccionActual = direccion;
+  navegarA("vistaDireccion", direccion.nombre);
+  renderDireccion();
+}
+
+function renderDireccion() {
+  const cont = document.getElementById("listaItems");
+  if (!direccionActual.items.length) {
+    cont.innerHTML = '<div class="empty">Esta dirección no tiene items.</div>';
+    return;
+  }
+  let html = "";
+  let capituloActual = null;
+  direccionActual.items.forEach((it, i) => {
+    if (it.capitulo !== capituloActual) {
+      capituloActual = it.capitulo;
+      html += `<div class="capitulo-titulo">${capituloActual || "Otros"}</div>`;
+    }
+    const completo = it.cantidadPresupuestada > 0 && it.cantidadEjecutada >= it.cantidadPresupuestada;
+    html += `
+      <div class="item-row" data-idx="${i}">
+        <div class="item-desc">${it.item} — ${it.descripcion}</div>
+        <div class="item-meta">
+          <span>${formatoNumero(it.cantidadEjecutada)} / ${formatoNumero(it.cantidadPresupuestada)} <span class="badge-unidad">${it.unidad || "?"}</span></span>
+          <span class="item-progreso ${completo ? "completo" : ""}">${it.cantidadPresupuestada ? Math.round((it.cantidadEjecutada / it.cantidadPresupuestada) * 100) + "%" : ""}</span>
+        </div>
+      </div>
+    `;
+  });
+  cont.innerHTML = html;
+  cont.querySelectorAll(".item-row").forEach((el) => {
+    el.addEventListener("click", () => abrirItem(direccionActual.items[Number(el.dataset.idx)]));
+  });
+}
+
+// ---------- Vista: item (formulario + historial) ----------
+function tipoUnidad(unidadRaw) {
+  const u = (unidadRaw || "").trim().toUpperCase().replace(/[.\s]/g, "");
+  if (u === "M3/KM" || u === "M3KM") return "volumen_km";
+  if (u === "M3") return "volumen";
+  if (u === "M2") return "area";
+  if (u === "M" || u === "ML") return "longitud";
+  if (u === "UN" || u === "UND") return "unidad";
+  if (u === "DIA" || u === "DIAS" || u === "DÍA" || u === "DÍAS") return "dias";
+  return "otro";
+}
+
+function abrirItem(item) {
+  itemActual = item;
+  navegarA("vistaItem", item.item);
+  prepararFormularioNuevaMedida();
+}
+
+// Deja el formulario listo para cargar una medida nueva, SIN tocar la pila
+// de navegacion (se usa tanto al entrar por primera vez a un item como al
+// cancelar una edicion o despues de guardar, sin apilar pantallas de mas).
+function prepararFormularioNuevaMedida() {
+  medidaEnEdicion = null;
+  fotoBase64Actual = null;
+  fotoTipoActual = null;
+  document.getElementById("previewFoto").innerHTML = "";
+  document.getElementById("inputFoto").value = "";
+  document.getElementById("inputFoto").style.display = "block";
+  document.getElementById("observacionMedida").value = "";
+  document.getElementById("tituloFormularioMedida").textContent = "Nueva medida";
+  document.getElementById("btnGuardarMedida").textContent = "Guardar medida";
+  document.getElementById("btnCancelarEdicion").style.display = "none";
+  renderItemInfo();
+  renderCamposMedida();
+  renderHistorialMedidas();
+}
+
+function renderItemInfo() {
+  document.getElementById("cardItemInfo").innerHTML = `
+    <h2>${itemActual.item} — ${itemActual.descripcion}</h2>
+    <div class="config-fila"><span class="k">Unidad</span><span class="v">${itemActual.unidad || "(sin definir en el presupuesto)"}</span></div>
+    <div class="config-fila"><span class="k">Presupuestado</span><span class="v">${formatoNumero(itemActual.cantidadPresupuestada)}</span></div>
+    <div class="config-fila"><span class="k">Ejecutado</span><span class="v"><b>${formatoNumero(itemActual.cantidadEjecutada)}</b></span></div>
+  `;
+}
+
+function renderCamposMedida() {
+  const tipo = tipoUnidad(itemActual.unidad);
+  const cont = document.getElementById("camposMedida");
+  let html = "";
+  if (tipo === "longitud") {
+    html = `<div class="field"><label>Longitud (m)</label><input type="number" step="any" id="campoLongitud" /></div>`;
+  } else if (tipo === "area") {
+    html = `
+      <div class="field"><label>Longitud (m)</label><input type="number" step="any" id="campoLongitud" /></div>
+      <div class="field"><label>Ancho (m)</label><input type="number" step="any" id="campoAncho" /></div>`;
+  } else if (tipo === "volumen") {
+    html = `
+      <div class="field"><label>Longitud (m)</label><input type="number" step="any" id="campoLongitud" /></div>
+      <div class="field"><label>Ancho (m)</label><input type="number" step="any" id="campoAncho" /></div>
+      <div class="field"><label>Alto (m)</label><input type="number" step="any" id="campoAlto" /></div>
+      <div class="field"><label>Volumen directo (m³) — opcional, para formas irregulares (sobreescribe L x A x H)</label><input type="number" step="any" id="campoVolumenDirecto" /></div>`;
+  } else if (tipo === "volumen_km") {
+    html = `
+      <div class="field"><label>Volumen (m³)</label><input type="number" step="any" id="campoVolumen" /></div>
+      <div class="field"><label>Distancia (km)</label><input type="number" step="any" id="campoDistancia" /></div>`;
+  } else if (tipo === "unidad" || tipo === "dias") {
+    const etiqueta = tipo === "dias" ? "Cantidad de días" : "Cantidad (unidades)";
+    html = `<div class="field"><label>${etiqueta}</label><input type="number" step="any" id="campoCantidadDirecta" /></div>`;
+  } else {
+    html = `
+      <div class="empty" style="padding:4px 0;font-size:12.5px;color:#B26A00">Unidad "${itemActual.unidad || "(sin definir)"}" no reconocida automáticamente. Escribe la cantidad directamente.</div>
+      <div class="field"><label>Cantidad</label><input type="number" step="any" id="campoCantidadDirecta" /></div>`;
+  }
+  cont.innerHTML = html;
+  cont.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", recalcularCantidad));
+  recalcularCantidad();
+}
+
+function valorCampo(id) {
+  const el = document.getElementById(id);
+  return el ? (Number(el.value) || 0) : 0;
+}
+
+function calcularCantidadActual() {
+  const tipo = tipoUnidad(itemActual.unidad);
+  if (tipo === "longitud") return valorCampo("campoLongitud");
+  if (tipo === "area") return valorCampo("campoLongitud") * valorCampo("campoAncho");
+  if (tipo === "volumen") {
+    const directo = valorCampo("campoVolumenDirecto");
+    if (directo > 0) return directo;
+    return valorCampo("campoLongitud") * valorCampo("campoAncho") * valorCampo("campoAlto");
+  }
+  if (tipo === "volumen_km") return valorCampo("campoVolumen") * valorCampo("campoDistancia");
+  return valorCampo("campoCantidadDirecta");
+}
+
+function recalcularCantidad() {
+  const cantidad = calcularCantidadActual();
+  document.getElementById("cantidadCalculadaTexto").textContent =
+    `Cantidad a registrar: ${formatoNumero(cantidad)} ${itemActual.unidad || ""}`;
+}
+
+document.getElementById("inputFoto").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  fotoTipoActual = file.type || "image/jpeg";
+  const reader = new FileReader();
+  reader.onload = () => {
+    fotoBase64Actual = reader.result.split(",")[1];
+    document.getElementById("previewFoto").innerHTML = `<img src="${reader.result}" style="max-width:100%;border-radius:10px;margin-top:8px" />`;
+  };
+  reader.readAsDataURL(file);
+});
+
+async function recargarDireccionYItem() {
+  const res = await fetch(`${API_BASE}/api/obras/${encodeURIComponent(obraActual.obra.obraId)}`);
+  const data = await res.json();
+  obraActual = data;
+  const dir = obraActual.direcciones.find((d) => d.nombre === direccionActual.nombre);
+  direccionActual = dir;
+  const it = dir ? dir.items.find((x) => x.item === itemActual.item) : null;
+  if (it) itemActual = it;
+}
+
+document.getElementById("btnGuardarMedida").addEventListener("click", async () => {
+  const cantidad = calcularCantidadActual();
+  if (!cantidad || cantidad <= 0) { mostrarToast("Ingresa una medida válida", true); return; }
+
+  const payload = {
+    obraId: obraActual.obra.obraId,
+    direccion: direccionActual.nombre,
+    item: itemActual.item,
+    descripcion: itemActual.descripcion,
+    unidad: itemActual.unidad,
+    longitud: document.getElementById("campoLongitud") ? valorCampo("campoLongitud") : "",
+    ancho: document.getElementById("campoAncho") ? valorCampo("campoAncho") : "",
+    alto: document.getElementById("campoAlto") ? valorCampo("campoAlto") : "",
+    volumen: document.getElementById("campoVolumen") ? valorCampo("campoVolumen")
+      : (document.getElementById("campoVolumenDirecto") ? valorCampo("campoVolumenDirecto") : ""),
+    distanciaKm: document.getElementById("campoDistancia") ? valorCampo("campoDistancia") : "",
+    cantidad: cantidad,
+    observacion: document.getElementById("observacionMedida").value.trim(),
+  };
+  if (fotoBase64Actual) {
+    payload.fotoBase64 = fotoBase64Actual;
+    payload.fotoTipo = fotoTipoActual;
+    payload.fotoNombre = `${itemActual.item}_${Date.now()}`;
+  }
+
+  const btn = document.getElementById("btnGuardarMedida");
+  btn.disabled = true;
+  try {
+    let res;
+    if (medidaEnEdicion) {
+      res = await fetch(`${API_BASE}/api/medidas/${medidaEnEdicion}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+    } else {
+      res = await fetch(API_BASE + "/api/medidas", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+    }
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al guardar");
+    mostrarToast(medidaEnEdicion ? "Medida actualizada ✓" : "Medida guardada ✓");
+    await recargarDireccionYItem();
+    prepararFormularioNuevaMedida();
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function renderHistorialMedidas() {
+  const cont = document.getElementById("listaMedidas");
+  const medidas = obraActual.medidas.filter((m) => m.direccion === direccionActual.nombre && m.item === itemActual.item);
+  if (!medidas.length) {
+    cont.innerHTML = '<div class="empty">Todavía no hay medidas registradas para este item.</div>';
+    return;
+  }
+  cont.innerHTML = medidas.slice().reverse().map((m) => `
+    <div class="medida-row" data-id="${m.id}">
+      ${m.fotoUrl ? `<a href="${m.fotoUrl}" target="_blank"><img src="${m.fotoUrl.replace('/view?usp=drivesdk','')}" onerror="this.style.display='none'" /></a>` : ""}
+      <div class="info">
+        <div class="cant">${formatoNumero(m.cantidad)} ${m.unidad || ""}</div>
+        <div class="fecha">${m.fechaHora}</div>
+        ${m.observacion ? `<div>${m.observacion}</div>` : ""}
+      </div>
+      <div class="acciones">
+        <button type="button" class="btn-editar" title="Editar">✏️</button>
+        <button type="button" class="btn-borrar" title="Borrar">🗑</button>
+      </div>
+    </div>
+  `).join("");
+  cont.querySelectorAll(".btn-editar").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const id = e.target.closest(".medida-row").dataset.id;
+      const m = obraActual.medidas.find((x) => x.id === id);
+      cargarMedidaParaEditar(m);
+    });
+  });
+  cont.querySelectorAll(".btn-borrar").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      const id = e.target.closest(".medida-row").dataset.id;
+      if (!confirm("¿Borrar esta medida?")) return;
+      try {
+        await fetch(`${API_BASE}/api/medidas/${id}`, {
+          method: "DELETE", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ obraId: obraActual.obra.obraId }),
+        });
+        mostrarToast("Medida borrada");
+        await recargarDireccionYItem();
+        renderItemInfo();
+        renderHistorialMedidas();
+      } catch (err) {
+        mostrarToast("Error al borrar", true);
+      }
+    });
+  });
+}
+
+function cargarMedidaParaEditar(m) {
+  medidaEnEdicion = m.id;
+  document.getElementById("tituloFormularioMedida").textContent = "Editar medida";
+  document.getElementById("btnGuardarMedida").textContent = "Actualizar medida";
+  document.getElementById("btnCancelarEdicion").style.display = "block";
+  document.getElementById("inputFoto").style.display = "none";
+  document.getElementById("previewFoto").innerHTML = m.fotoUrl ? '<div class="empty" style="padding:4px 0">La foto ya guardada no se puede reemplazar al editar.</div>' : "";
+  document.getElementById("observacionMedida").value = m.observacion || "";
+
+  renderCamposMedida();
+  if (document.getElementById("campoLongitud")) document.getElementById("campoLongitud").value = m.longitud || "";
+  if (document.getElementById("campoAncho")) document.getElementById("campoAncho").value = m.ancho || "";
+  if (document.getElementById("campoAlto")) document.getElementById("campoAlto").value = m.alto || "";
+  if (document.getElementById("campoVolumen")) document.getElementById("campoVolumen").value = m.volumen || "";
+  if (document.getElementById("campoVolumenDirecto")) document.getElementById("campoVolumenDirecto").value = m.volumen || "";
+  if (document.getElementById("campoDistancia")) document.getElementById("campoDistancia").value = m.distanciaKm || "";
+  if (document.getElementById("campoCantidadDirecta")) document.getElementById("campoCantidadDirecta").value = m.cantidad || "";
+  recalcularCantidad();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+document.getElementById("btnCancelarEdicion").addEventListener("click", () => {
+  prepararFormularioNuevaMedida();
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+irAObras();
+</script>
+</body>
+</html>
