@@ -160,7 +160,7 @@
       <div id="camposMedida"></div>
       <div class="field">
         <label>Foto de la actividad (opcional)</label>
-        <input type="file" id="inputFoto" accept="image/*" capture="environment" />
+        <input type="file" id="inputFoto" accept="image/*" />
         <div id="previewFoto"></div>
       </div>
       <div class="field">
@@ -628,6 +628,11 @@ document.getElementById("btnGuardarMedida").addEventListener("click", async () =
   }
 });
 
+function miniaturaFoto_(fotoUrl) {
+  const m = (fotoUrl || "").match(/\/d\/([^/]+)/);
+  return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w400` : fotoUrl;
+}
+
 function renderHistorialMedidas() {
   const cont = document.getElementById("listaMedidas");
   const medidas = obraActual.medidas.filter((m) => m.direccion === direccionActual.nombre && m.item === itemActual.item);
@@ -637,7 +642,7 @@ function renderHistorialMedidas() {
   }
   cont.innerHTML = medidas.slice().reverse().map((m) => `
     <div class="medida-row" data-id="${m.id}">
-      ${m.fotoUrl ? `<a href="${m.fotoUrl}" target="_blank"><img src="${m.fotoUrl.replace('/view?usp=drivesdk','')}" onerror="this.style.display='none'" /></a>` : ""}
+      ${m.fotoUrl ? `<a href="${m.fotoUrl}" target="_blank"><img src="${miniaturaFoto_(m.fotoUrl)}" onerror="this.style.display='none'" /></a>` : ""}
       <div class="info">
         <div class="cant">${formatoNumero(m.cantidad)} ${m.unidad || ""}</div>
         <div class="fecha">${m.fechaHora}</div>
