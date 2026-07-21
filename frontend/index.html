@@ -499,6 +499,8 @@ function renderItemInfo() {
   `;
 }
 
+const TIPOS_CON_CANTIDAD_VECES = ["longitud", "area", "volumen", "volumen_km"];
+
 function renderCamposMedida() {
   const tipo = tipoUnidad(itemActual.unidad);
   const cont = document.getElementById("camposMedida");
@@ -527,6 +529,13 @@ function renderCamposMedida() {
       <div class="empty" style="padding:4px 0;font-size:12.5px;color:#B26A00">Unidad "${itemActual.unidad || "(sin definir)"}" no reconocida automáticamente. Escribe la cantidad directamente.</div>
       <div class="field"><label>Cantidad</label><input type="number" step="any" id="campoCantidadDirecta" /></div>`;
   }
+  if (TIPOS_CON_CANTIDAD_VECES.includes(tipo)) {
+    html += `
+      <div class="field">
+        <label>Cantidad (número de elementos iguales con esta misma medida)</label>
+        <input type="number" step="any" id="campoCantidadVeces" value="1" />
+      </div>`;
+  }
   cont.innerHTML = html;
   cont.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", recalcularCantidad));
   recalcularCantidad();
@@ -537,7 +546,10 @@ function valorCampo(id) {
   return el ? (Number(el.value) || 0) : 0;
 }
 
-function calcularCantidadActual() {
+// La "base" es el resultado de la operacion segun la unidad (largo x ancho x
+// alto para volumen, largo x ancho para area, etc.), SIN multiplicar por la
+// cantidad de elementos iguales todavia.
+function calcularBase() {
   const tipo = tipoUnidad(itemActual.unidad);
   if (tipo === "longitud") return valorCampo("campoLongitud");
   if (tipo === "area") return valorCampo("campoLongitud") * valorCampo("campoAncho");
@@ -550,10 +562,28 @@ function calcularCantidadActual() {
   return valorCampo("campoCantidadDirecta");
 }
 
+// El multiplicador manual "Cantidad" (cuantos elementos iguales tienen esta
+// misma medida). Para las unidades directas (UND/DIAS/otro) no aplica: ese
+// campo unico ya es la cantidad final.
+function obtenerCantidadVeces() {
+  const tipo = tipoUnidad(itemActual.unidad);
+  if (!TIPOS_CON_CANTIDAD_VECES.includes(tipo)) return 1;
+  const el = document.getElementById("campoCantidadVeces");
+  return el ? (Number(el.value) || 1) : 1;
+}
+
+// La "Cantidad Parcial": base x cantidad de elementos iguales. Este es el
+// valor final que cuenta contra lo presupuestado.
+function calcularCantidadParcial() {
+  const tipo = tipoUnidad(itemActual.unidad);
+  if (!TIPOS_CON_CANTIDAD_VECES.includes(tipo)) return calcularBase();
+  return calcularBase() * obtenerCantidadVeces();
+}
+
 function recalcularCantidad() {
-  const cantidad = calcularCantidadActual();
+  const parcial = calcularCantidadParcial();
   document.getElementById("cantidadCalculadaTexto").textContent =
-    `Cantidad a registrar: ${formatoNumero(cantidad)} ${itemActual.unidad || ""}`;
+    `Cantidad parcial a registrar: ${formatoNumero(parcial)} ${itemActual.unidad || ""}`;
 }
 
 document.getElementById("inputFoto").addEventListener("change", (e) => {
@@ -578,9 +608,15 @@ async function recargarDireccionYItem() {
   if (it) itemActual = it;
 }
 
+function valorCantidadColumna() {
+  const tipo = tipoUnidad(itemActual.unidad);
+  if (TIPOS_CON_CANTIDAD_VECES.includes(tipo)) return obtenerCantidadVeces();
+  return calcularBase();
+}
+
 document.getElementById("btnGuardarMedida").addEventListener("click", async () => {
-  const cantidad = calcularCantidadActual();
-  if (!cantidad || cantidad <= 0) { mostrarToast("Ingresa una medida válida", true); return; }
+  const parcial = calcularCantidadParcial();
+  if (!parcial || parcial <= 0) { mostrarToast("Ingresa una medida válida", true); return; }
 
   const payload = {
     obraId: obraActual.obra.obraId,
@@ -594,7 +630,7 @@ document.getElementById("btnGuardarMedida").addEventListener("click", async () =
     volumen: document.getElementById("campoVolumen") ? valorCampo("campoVolumen")
       : (document.getElementById("campoVolumenDirecto") ? valorCampo("campoVolumenDirecto") : ""),
     distanciaKm: document.getElementById("campoDistancia") ? valorCampo("campoDistancia") : "",
-    cantidad: cantidad,
+    cantidad: valorCantidadColumna(),
     observacion: document.getElementById("observacionMedida").value.trim(),
   };
   if (fotoBase64Actual) {
@@ -644,7 +680,7 @@ function renderHistorialMedidas() {
     <div class="medida-row" data-id="${m.id}">
       ${m.fotoUrl ? `<a href="${m.fotoUrl}" target="_blank"><img src="${miniaturaFoto_(m.fotoUrl)}" onerror="this.style.display='none'" /></a>` : ""}
       <div class="info">
-        <div class="cant">${formatoNumero(m.cantidad)} ${m.unidad || ""}</div>
+        <div class="cant">${formatoNumero(m.cantidadParcial != null ? m.cantidadParcial : m.cantidad)} ${m.unidad || ""}</div>
         <div class="fecha">${m.fechaHora}</div>
         ${m.observacion ? `<div>${m.observacion}</div>` : ""}
       </div>
@@ -698,6 +734,7 @@ function cargarMedidaParaEditar(m) {
   if (document.getElementById("campoVolumenDirecto")) document.getElementById("campoVolumenDirecto").value = m.volumen || "";
   if (document.getElementById("campoDistancia")) document.getElementById("campoDistancia").value = m.distanciaKm || "";
   if (document.getElementById("campoCantidadDirecta")) document.getElementById("campoCantidadDirecta").value = m.cantidad || "";
+  if (document.getElementById("campoCantidadVeces")) document.getElementById("campoCantidadVeces").value = m.cantidad || 1;
   recalcularCantidad();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
