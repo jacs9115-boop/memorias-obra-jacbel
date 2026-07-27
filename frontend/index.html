@@ -96,6 +96,13 @@
   .medida-row .info .fecha { color: var(--muted); }
   .medida-row .acciones { display: flex; flex-direction: column; gap: 6px; }
   .medida-row .acciones button { background: none; border: none; font-size: 15px; padding: 2px 6px; }
+  .medida-row .fotos-mini { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; }
+  .foto-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .foto-thumb { position: relative; width: 70px; height: 70px; }
+  .foto-thumb img { width: 70px; height: 70px; object-fit: cover; border-radius: 8px; }
+  .foto-thumb .quitar { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%;
+    background: #C0392B; color: #fff; border: none; font-size: 12px; line-height: 20px; padding: 0; }
+  .btn-agregar-foto { margin-top: 8px; }
   .badge-unidad { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
     border-radius: 100px; background: var(--border); color: var(--text); margin-left: 6px; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
@@ -159,9 +166,11 @@
       <h2 id="tituloFormularioMedida">Nueva medida</h2>
       <div id="camposMedida"></div>
       <div class="field">
-        <label>Foto de la actividad (opcional)</label>
-        <input type="file" id="inputFoto" accept="image/*" />
-        <div id="previewFoto"></div>
+        <label>Fotos de la actividad (opcional)</label>
+        <div id="fotosGuardadas"></div>
+        <div id="previewFoto" class="foto-thumbs"></div>
+        <input type="file" id="inputFoto" accept="image/*" style="display:none" />
+        <button type="button" class="btn-secondary btn-agregar-foto" id="btnAgregarFoto">+ Agregar foto</button>
       </div>
       <div class="field">
         <label>Observación (opcional)</label>
@@ -180,7 +189,6 @@
 </main>
 
 <div class="toast" id="toast"></div>
-
 <script>
 const API_BASE = "";
 
@@ -192,8 +200,8 @@ let obraActual = null;
 let direccionActual = null;
 let itemActual = null;
 let medidaEnEdicion = null;
-let fotoBase64Actual = null;
-let fotoTipoActual = null;
+let fotosActuales = [];
+let fotosGuardadasActuales = [];
 
 const toast = document.getElementById("toast");
 function mostrarToast(msg, esError) {
@@ -272,7 +280,6 @@ document.getElementById("btnNuevaObra").addEventListener("click", () => {
   document.getElementById("btnPrevisualizar").disabled = true;
   cargarPresupuestos();
 });
-
 // ---------- Vista: nueva obra ----------
 async function cargarPresupuestos() {
   const cont = document.getElementById("listaPresupuestos");
@@ -360,7 +367,6 @@ document.getElementById("btnCrearObra").addEventListener("click", async () => {
     btn.textContent = "Crear obra";
   }
 });
-
 // ---------- Vista: detalle de obra ----------
 async function abrirObra(obraId) {
   navegarA("vistaObraDetalle", "Cargando...");
@@ -452,7 +458,6 @@ function renderDireccion() {
     el.addEventListener("click", () => abrirItem(direccionActual.items[Number(el.dataset.idx)]));
   });
 }
-
 // ---------- Vista: item (formulario + historial) ----------
 function tipoUnidad(unidadRaw) {
   const u = (unidadRaw || "").trim().toUpperCase().replace(/[.\s]/g, "");
@@ -476,11 +481,11 @@ function abrirItem(item) {
 // cancelar una edicion o despues de guardar, sin apilar pantallas de mas).
 function prepararFormularioNuevaMedida() {
   medidaEnEdicion = null;
-  fotoBase64Actual = null;
-  fotoTipoActual = null;
-  document.getElementById("previewFoto").innerHTML = "";
+  fotosActuales = [];
+  fotosGuardadasActuales = [];
+  document.getElementById("fotosGuardadas").innerHTML = "";
   document.getElementById("inputFoto").value = "";
-  document.getElementById("inputFoto").style.display = "block";
+  renderPreviewFotos();
   document.getElementById("observacionMedida").value = "";
   document.getElementById("tituloFormularioMedida").textContent = "Nueva medida";
   document.getElementById("btnGuardarMedida").textContent = "Guardar medida";
@@ -540,7 +545,6 @@ function renderCamposMedida() {
   cont.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", recalcularCantidad));
   recalcularCantidad();
 }
-
 function valorCampo(id) {
   const el = document.getElementById(id);
   return el ? (Number(el.value) || 0) : 0;
@@ -586,17 +590,37 @@ function recalcularCantidad() {
     `Cantidad parcial a registrar: ${formatoNumero(parcial)} ${itemActual.unidad || ""}`;
 }
 
+document.getElementById("btnAgregarFoto").addEventListener("click", () => {
+  document.getElementById("inputFoto").click();
+});
+
 document.getElementById("inputFoto").addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  fotoTipoActual = file.type || "image/jpeg";
+  const tipo = file.type || "image/jpeg";
   const reader = new FileReader();
   reader.onload = () => {
-    fotoBase64Actual = reader.result.split(",")[1];
-    document.getElementById("previewFoto").innerHTML = `<img src="${reader.result}" style="max-width:100%;border-radius:10px;margin-top:8px" />`;
+    fotosActuales.push({ base64: reader.result.split(",")[1], tipo, dataUrl: reader.result });
+    renderPreviewFotos();
+    document.getElementById("inputFoto").value = "";
   };
   reader.readAsDataURL(file);
 });
+
+function renderPreviewFotos() {
+  const cont = document.getElementById("previewFoto");
+  cont.innerHTML = fotosActuales.map((f, i) => `
+    <div class="foto-thumb">
+      <img src="${f.dataUrl}" />
+      <button type="button" class="quitar" data-i="${i}" aria-label="Quitar foto">✕</button>
+    </div>`).join("");
+  cont.querySelectorAll(".quitar").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      fotosActuales.splice(Number(btn.dataset.i), 1);
+      renderPreviewFotos();
+    });
+  });
+}
 
 async function recargarDireccionYItem() {
   const res = await fetch(`${API_BASE}/api/obras/${encodeURIComponent(obraActual.obra.obraId)}`);
@@ -613,7 +637,6 @@ function valorCantidadColumna() {
   if (TIPOS_CON_CANTIDAD_VECES.includes(tipo)) return obtenerCantidadVeces();
   return calcularBase();
 }
-
 document.getElementById("btnGuardarMedida").addEventListener("click", async () => {
   const parcial = calcularCantidadParcial();
   if (!parcial || parcial <= 0) { mostrarToast("Ingresa una medida válida", true); return; }
@@ -633,10 +656,10 @@ document.getElementById("btnGuardarMedida").addEventListener("click", async () =
     cantidad: valorCantidadColumna(),
     observacion: document.getElementById("observacionMedida").value.trim(),
   };
-  if (fotoBase64Actual) {
-    payload.fotoBase64 = fotoBase64Actual;
-    payload.fotoTipo = fotoTipoActual;
-    payload.fotoNombre = `${itemActual.item}_${Date.now()}`;
+  if (fotosActuales.length) {
+    payload.fotos = fotosActuales.map((f, i) => ({
+      base64: f.base64, tipo: f.tipo, nombre: `${itemActual.item}_${Date.now()}_${i}`,
+    }));
   }
 
   const btn = document.getElementById("btnGuardarMedida");
@@ -678,7 +701,9 @@ function renderHistorialMedidas() {
   }
   cont.innerHTML = medidas.slice().reverse().map((m) => `
     <div class="medida-row" data-id="${m.id}">
-      ${m.fotoUrl ? `<a href="${m.fotoUrl}" target="_blank"><img src="${miniaturaFoto_(m.fotoUrl)}" onerror="this.style.display='none'" /></a>` : ""}
+      ${(m.fotosUrls && m.fotosUrls.length) ? `<div class="fotos-mini">${m.fotosUrls.map((u) =>
+        `<a href="${u}" target="_blank"><img src="${miniaturaFoto_(u)}" onerror="this.style.display='none'" /></a>`
+      ).join("")}</div>` : ""}
       <div class="info">
         <div class="cant">${formatoNumero(m.cantidadParcial != null ? m.cantidadParcial : m.cantidad)} ${m.unidad || ""}</div>
         <div class="fecha">${m.fechaHora}</div>
@@ -716,14 +741,20 @@ function renderHistorialMedidas() {
     });
   });
 }
-
 function cargarMedidaParaEditar(m) {
   medidaEnEdicion = m.id;
   document.getElementById("tituloFormularioMedida").textContent = "Editar medida";
   document.getElementById("btnGuardarMedida").textContent = "Actualizar medida";
   document.getElementById("btnCancelarEdicion").style.display = "block";
-  document.getElementById("inputFoto").style.display = "none";
-  document.getElementById("previewFoto").innerHTML = m.fotoUrl ? '<div class="empty" style="padding:4px 0">La foto ya guardada no se puede reemplazar al editar.</div>' : "";
+  fotosActuales = [];
+  fotosGuardadasActuales = m.fotosUrls || [];
+  renderPreviewFotos();
+  const fotosGuardadasEl = document.getElementById("fotosGuardadas");
+  fotosGuardadasEl.innerHTML = fotosGuardadasActuales.length
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Fotos ya guardadas:</div><div class="foto-thumbs">${fotosGuardadasActuales.map((u) =>
+        `<a href="${u}" target="_blank"><img src="${miniaturaFoto_(u)}" style="width:70px;height:70px;object-fit:cover;border-radius:8px" onerror="this.style.display='none'" /></a>`
+      ).join("")}</div>`
+    : "";
   document.getElementById("observacionMedida").value = m.observacion || "";
 
   renderCamposMedida();
