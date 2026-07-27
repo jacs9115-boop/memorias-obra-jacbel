@@ -114,6 +114,33 @@ function normalizarTexto_(v) {
   return String(v).trim();
 }
 
+// La columna FotoURL guarda una o varias URLs de Drive separadas por "|"
+// (las URLs de Drive nunca traen ese caracter, asi que es un separador
+// seguro sin necesidad de JSON ni una hoja aparte).
+function separarFotos_(fotoUrlCombinada) {
+  var t = normalizarTexto_(fotoUrlCombinada);
+  if (!t) return [];
+  return t.split("|").map(function (u) { return u.trim(); }).filter(function (u) { return u; });
+}
+
+function subirFotos_(fotos) {
+  if (!fotos || !fotos.length) return [];
+  var carpetaId = carpetaFotos_();
+  var urls = [];
+  fotos.forEach(function (f) {
+    if (!f || !f.base64) return;
+    var blob = Utilities.newBlob(
+      Utilities.base64Decode(f.base64),
+      f.tipo || "image/jpeg",
+      (f.nombre || "foto") + ".jpg"
+    );
+    var archivo = DriveApp.getFolderById(carpetaId).createFile(blob);
+    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    urls.push(archivo.getUrl());
+  });
+  return urls;
+}
+
 function normalizarEncabezadoTabla_(v) {
   var t = normalizarTexto_(v).toUpperCase();
   t = t.replace(/[ÁÀÄ]/g, "A").replace(/[ÉÈË]/g, "E").replace(/[ÍÌÏ]/g, "I")
@@ -130,7 +157,6 @@ function extraerValorConDosPuntos_(texto) {
   if (idx === -1) return texto;
   return texto.substring(idx + 1).trim();
 }
-
 function parsearPresupuesto_(fileId) {
   var filas = convertirYLeer_(fileId);
 
@@ -236,7 +262,6 @@ function buscarObra_(obraId) {
   }
   return null;
 }
-
 // ---------- Crear una obra nueva a partir de un presupuesto ----------
 
 function crearObra_(body) {
@@ -325,10 +350,24 @@ function leerObra_(obraId) {
   var filasMemoria = ultimaFilaMemoria > 1 ? hojaMemoria.getRange(2, 1, ultimaFilaMemoria - 1, 14).getValues() : [];
 
   var totales = {};
-  filasMemoria.forEach(function (r) {
+  var medidas = filasMemoria.map(function (r) {
+    var tipo = tipoUnidad_(r[5]);
+    var m = { longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10], cantidad: r[11] };
+    var cantidadParcial = calcularCantidadParcial_(tipo, m);
     var clave = r[2] + "||" + r[3];
-    totales[clave] = (totales[clave] || 0) + (Number(r[11]) || 0);
+    totales[clave] = (totales[clave] || 0) + cantidadParcial;
+    return {
+      id: r[0], fechaHora: r[1], direccion: r[2], item: r[3], descripcion: r[4], unidad: r[5],
+      longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10],
+      cantidad: r[11], cantidadParcial: cantidadParcial, fotoUrl: r[12], fotosUrls: separarFotos_(r[12]), observacion: r[13],
+    };
   });
+
+  // Reconstruye "Memoria de Cálculo" y "Registro Fotográfico" cada vez que se
+  // abre la obra, sin importar si "Memoria" cambio por la app o porque el
+  // usuario edito/borro filas a mano directamente en la hoja: asi las dos
+  // hojas calculadas nunca quedan desincronizadas de la fuente real de datos.
+  regenerarMemoriaCalculo_(ss);
 
   var direccionesMap = {};
   var ordenDirecciones = [];
@@ -348,17 +387,8 @@ function leerObra_(obraId) {
     return { nombre: nombre, items: direccionesMap[nombre] };
   });
 
-  var medidas = filasMemoria.map(function (r) {
-    return {
-      id: r[0], fechaHora: r[1], direccion: r[2], item: r[3], descripcion: r[4], unidad: r[5],
-      longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10],
-      cantidad: r[11], fotoUrl: r[12], observacion: r[13],
-    };
-  });
-
   return { obra: obra, direcciones: direcciones, medidas: medidas };
 }
-
 // ---------- Medidas (memoria de calculo) ----------
 
 function guardarMedida_(body) {
@@ -368,17 +398,7 @@ function guardarMedida_(body) {
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hoja = ss.getSheetByName("Memoria");
 
-  var fotoUrl = "";
-  if (body.fotoBase64) {
-    var blob = Utilities.newBlob(
-      Utilities.base64Decode(body.fotoBase64),
-      body.fotoTipo || "image/jpeg",
-      (body.fotoNombre || "foto") + ".jpg"
-    );
-    var archivo = DriveApp.getFolderById(carpetaFotos_()).createFile(blob);
-    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    fotoUrl = archivo.getUrl();
-  }
+  var fotosUrls = subirFotos_(body.fotos);
 
   var id = Utilities.getUuid();
   var ahora = new Date();
@@ -387,12 +407,12 @@ function guardarMedida_(body) {
   var fila = [
     id, fechaHora, body.direccion || "", body.item || "", body.descripcion || "", body.unidad || "",
     body.longitud || "", body.ancho || "", body.alto || "", body.volumen || "", body.distanciaKm || "",
-    Number(body.cantidad) || 0, fotoUrl, body.observacion || "",
+    Number(body.cantidad) || 0, fotosUrls.join("|"), body.observacion || "",
   ];
   hoja.appendRow(fila);
   regenerarMemoriaCalculo_(ss);
 
-  return { ok: true, id: id, fechaHora: fechaHora, fotoUrl: fotoUrl };
+  return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: fotosUrls };
 }
 
 function editarMedida_(body) {
@@ -418,6 +438,11 @@ function editarMedida_(body) {
       hoja.getRange(fila, 10).setValue(body.volumen || "");
       hoja.getRange(fila, 11).setValue(body.distanciaKm || "");
       hoja.getRange(fila, 12).setValue(Number(body.cantidad) || 0);
+      var fotosNuevas = subirFotos_(body.fotos);
+      if (fotosNuevas.length) {
+        var fotosActuales = separarFotos_(hoja.getRange(fila, 13).getValue());
+        hoja.getRange(fila, 13).setValue(fotosActuales.concat(fotosNuevas).join("|"));
+      }
       hoja.getRange(fila, 14).setValue(body.observacion || "");
       regenerarMemoriaCalculo_(ss);
       return { ok: true };
@@ -445,7 +470,6 @@ function borrarMedida_(body) {
   }
   return { ok: false, error: "Medida no encontrada" };
 }
-
 // Reconstruye por completo la hoja "Memoria de Cálculo": para cada
 // direccion/capitulo/item que tenga al menos una medida cargada, arma una
 // mini-tabla con una fila por medida (columnas Foto/Descripcion/Longitud/
@@ -454,6 +478,12 @@ function borrarMedida_(body) {
 // vuelve a armar desde cero cada vez (se borra y se crea de nuevo la hoja)
 // para no arrastrar fusiones de celdas ni formato de una version anterior
 // con mas o menos filas.
+//
+// Las fotos NO se incrustan aqui (una imagen grande dentro de esta tabla
+// corre las filas y columnas de todo lo demas). En su lugar, cada medida
+// con foto queda con una referencia "Imagen N" con hipervinculo hacia su
+// fila exacta en la hoja "Registro Fotografico", que es donde se ve la
+// foto en grande.
 function regenerarMemoriaCalculo_(ss) {
   var NOMBRE_HOJA = "Memoria de Cálculo";
 
@@ -482,6 +512,8 @@ function regenerarMemoriaCalculo_(ss) {
   var fila = 1;
   var direccionActual = null;
   var capituloActual = null;
+  var fotos = [];
+  var pendientesFoto = [];
 
   filasPres.forEach(function (r) {
     var direccion = r[0], capitulo = r[1], item = r[2], descripcion = r[3], unidad = r[4];
@@ -493,50 +525,220 @@ function regenerarMemoriaCalculo_(ss) {
       direccionActual = direccion;
       capituloActual = null;
       hoja.getRange(fila, 1).setValue(direccion);
-      hoja.getRange(fila, 1, 1, 8).merge().setFontWeight("bold").setBackground("#1F4E78").setFontColor("#FFFFFF");
+      hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold").setBackground("#1F4E78").setFontColor("#FFFFFF");
       fila++;
     }
     if (capitulo !== capituloActual) {
       capituloActual = capitulo;
       hoja.getRange(fila, 1).setValue(capitulo);
-      hoja.getRange(fila, 1, 1, 8).merge().setFontWeight("bold").setBackground("#DCE6F1");
+      hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold").setBackground("#DCE6F1");
       fila++;
     }
 
     hoja.getRange(fila, 1).setValue(item + " — " + descripcion + " (" + (unidad || "sin unidad") + ")");
-    hoja.getRange(fila, 1, 1, 8).merge().setFontWeight("bold");
+    hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold");
     fila++;
 
-    hoja.getRange(fila, 1, 1, 8).setValues([["Foto", "Descripción / Observación", "Longitud", "Ancho", "Alto", "Volumen", "Km", "Cantidad"]]);
-    hoja.getRange(fila, 1, 1, 8).setFontWeight("bold").setBackground("#F0F0F0");
+    hoja.getRange(fila, 1, 1, 9).setValues([["Foto", "Descripción / Observación", "Longitud", "Ancho", "Alto", "Volumen", "Km", "Cantidad", "Cantidad Parcial"]]);
+    hoja.getRange(fila, 1, 1, 9).setFontWeight("bold").setBackground("#F0F0F0");
     fila++;
 
-    var total = 0;
+    var tipo = tipoUnidad_(unidad);
+    var filaInicioMedidas = fila;
     medidas.forEach(function (m) {
-      hoja.getRange(fila, 1, 1, 8).setValues([[
-        "", m.observacion || "", m.longitud || "", m.ancho || "", m.alto || "", m.volumen || "", m.distanciaKm || "", m.cantidad || 0,
+      hoja.getRange(fila, 1, 1, 9).setValues([[
+        "", m.observacion || "", m.longitud || "", m.ancho || "", m.alto || "", m.volumen || "", m.distanciaKm || "", m.cantidad || 0, "",
       ]]);
-      if (m.fotoUrl) {
-        hoja.getRange(fila, 1).setFormula('=HYPERLINK("' + m.fotoUrl + '";"Ver foto")');
+      hoja.getRange(fila, 9).setFormula(formulaCantidadParcial_(tipo, fila));
+      var urlsMedida = separarFotos_(m.fotoUrl);
+      if (urlsMedida.length) {
+        var indiceInicio = fotos.length;
+        var numeros = [];
+        urlsMedida.forEach(function (url) {
+          var numero = fotos.length + 1;
+          numeros.push(numero);
+          fotos.push({
+            numero: numero, direccion: direccion, item: item, descripcion: descripcion,
+            observacion: m.observacion || "", fotoUrl: url,
+          });
+        });
+        pendientesFoto.push({ fila: fila, indiceFoto: indiceInicio, numeros: numeros });
       }
-      total += Number(m.cantidad) || 0;
       fila++;
     });
+    var filaFinMedidas = fila - 1;
 
+    // El TOTAL solo suma la columna "Cantidad Parcial" (el resultado final).
+    // La columna "Cantidad" es el multiplicador manual por fila (cuantos
+    // elementos iguales), sumarla no tiene sentido.
     hoja.getRange(fila, 1).setValue("TOTAL");
-    hoja.getRange(fila, 1, 1, 7).merge().setFontWeight("bold").setHorizontalAlignment("right");
-    hoja.getRange(fila, 8).setValue(total).setFontWeight("bold");
+    hoja.getRange(fila, 1, 1, 8).merge().setFontWeight("bold").setHorizontalAlignment("right");
+    hoja.getRange(fila, 9).setFormula("=SUM(I" + filaInicioMedidas + ":I" + filaFinMedidas + ")").setFontWeight("bold");
     fila += 2;
   });
 
-  hoja.setColumnWidth(1, 90);
+  hoja.setColumnWidth(1, 100);
   hoja.setColumnWidth(2, 220);
   for (var c = 3; c <= 7; c++) hoja.setColumnWidth(c, 80);
   hoja.setColumnWidth(8, 90);
+  hoja.setColumnWidth(9, 110);
   hoja.setFrozenRows(0);
+
+  var meta = leerMetaContrato_(ss);
+  var gidFotografico = regenerarRegistroFotografico_(ss, fotos, meta);
+
+  pendientesFoto.forEach(function (p) {
+    var primera = fotos[p.indiceFoto];
+    var etiqueta = "Imagen " + p.numeros.join(", ");
+    if (primera.filaRegistro) {
+      hoja.getRange(p.fila, 1).setFormula(
+        '=HYPERLINK("#gid=' + gidFotografico + '&range=A' + primera.filaRegistro + '";"' + etiqueta + '")'
+      );
+    } else {
+      hoja.getRange(p.fila, 1).setValue(etiqueta);
+    }
+  });
 
   ss.setActiveSheet(hoja);
   ss.moveActiveSheet(3);
+}
+// Mismo criterio que tipoUnidad() en el frontend (frontend/index.html), para
+// saber que formula de calculo le corresponde a cada fila segun su unidad.
+function tipoUnidad_(unidadRaw) {
+  var u = (unidadRaw || "").trim().toUpperCase().replace(/[.\s]/g, "");
+  if (u === "M3/KM" || u === "M3KM") return "volumen_km";
+  if (u === "M3") return "volumen";
+  if (u === "M2") return "area";
+  if (u === "M" || u === "ML") return "longitud";
+  if (u === "UN" || u === "UND") return "unidad";
+  if (u === "DIA" || u === "DIAS" || u === "DÍA" || u === "DÍAS") return "dias";
+  return "otro";
+}
+
+// Arma la formula de la columna "Cantidad Parcial" para la fila dada, segun
+// el tipo de unidad del item: deja visible cual operacion se esta haciendo
+// (largo x ancho x alto para volumen, largo x ancho para area, etc.) y la
+// multiplica por la columna "Cantidad" (H, cuantos elementos iguales tienen
+// esta misma medida). Para UND/DIAS/otro no hay multiplicador: la columna
+// "Cantidad" ya es directamente el valor final.
+function formulaCantidadParcial_(tipo, fila) {
+  if (tipo === "longitud") return "=C" + fila + "*H" + fila;
+  if (tipo === "area") return "=C" + fila + "*D" + fila + "*H" + fila;
+  if (tipo === "volumen") {
+    return "=IF(N(F" + fila + ")>0;F" + fila + ";C" + fila + "*D" + fila + "*E" + fila + ")*H" + fila;
+  }
+  if (tipo === "volumen_km") return "=F" + fila + "*G" + fila + "*H" + fila;
+  return "=H" + fila;
+}
+
+// Igual que formulaCantidadParcial_ pero calculado en JS (no como formula de
+// hoja), para usar donde se necesita el numero ya resuelto: al leer una obra
+// (cantidadEjecutada acumulada contra lo presupuestado) y en el historial de
+// medidas que ve el usuario en la app.
+function calcularBase_(tipo, m) {
+  if (tipo === "longitud") return Number(m.longitud) || 0;
+  if (tipo === "area") return (Number(m.longitud) || 0) * (Number(m.ancho) || 0);
+  if (tipo === "volumen") {
+    var directo = Number(m.volumen) || 0;
+    if (directo > 0) return directo;
+    return (Number(m.longitud) || 0) * (Number(m.ancho) || 0) * (Number(m.alto) || 0);
+  }
+  if (tipo === "volumen_km") return (Number(m.volumen) || 0) * (Number(m.distanciaKm) || 0);
+  return Number(m.cantidad) || 0;
+}
+
+function calcularCantidadParcial_(tipo, m) {
+  if (tipo === "unidad" || tipo === "dias" || tipo === "otro") return calcularBase_(tipo, m);
+  return calcularBase_(tipo, m) * (Number(m.cantidad) || 1);
+}
+
+function leerMetaContrato_(ss) {
+  var hoja = ss.getSheetByName("Config");
+  var valores = hoja.getRange(1, 1, 5, 2).getValues();
+  var meta = {};
+  valores.forEach(function (r) {
+    if (r[0] === "Nombre Obra") meta.nombreObra = r[1];
+    else if (r[0] === "Número Contrato") meta.numeroContrato = r[1];
+    else if (r[0] === "Objeto") meta.objeto = r[1];
+    else if (r[0] === "Contratista") meta.contratista = r[1];
+    else if (r[0] === "Supervisor") meta.supervisor = r[1];
+  });
+  return meta;
+}
+// Reconstruye la hoja "Registro Fotografico": un anexo separado de la
+// Memoria de Calculo para que las fotos se puedan ver grandes y bien
+// presentadas (listas para imprimir/adjuntar) sin desordenar las filas y
+// columnas de la tabla de medidas. Encabezado con los datos del contrato,
+// agrupado por direccion, cada foto con el nombre de la actividad y el
+// mismo numero "Imagen N" que queda referenciado en la Memoria de Calculo.
+function regenerarRegistroFotografico_(ss, fotos, meta) {
+  var NOMBRE_HOJA = "Registro Fotográfico";
+  var COLS = 4;
+
+  var hojaVieja = ss.getSheetByName(NOMBRE_HOJA);
+  if (hojaVieja) ss.deleteSheet(hojaVieja);
+  var hoja = ss.insertSheet(NOMBRE_HOJA);
+
+  var fila = 1;
+  hoja.getRange(fila, 1, 1, COLS).merge().setValue("REGISTRO FOTOGRÁFICO")
+    .setFontWeight("bold").setFontSize(14).setHorizontalAlignment("center")
+    .setBackground("#1F4E78").setFontColor("#FFFFFF");
+  fila += 2;
+
+  [
+    ["Obra", meta.nombreObra], ["Contrato", meta.numeroContrato], ["Objeto", meta.objeto],
+    ["Contratista", meta.contratista], ["Supervisor", meta.supervisor],
+  ].forEach(function (d) {
+    hoja.getRange(fila, 1).setValue(d[0]).setFontWeight("bold");
+    hoja.getRange(fila, 2, 1, COLS - 1).merge().setValue(d[1] || "").setWrap(true);
+    fila++;
+  });
+  fila += 1;
+
+  if (!fotos.length) {
+    hoja.getRange(fila, 1, 1, COLS).merge().setValue("Todavía no hay fotos registradas.")
+      .setHorizontalAlignment("center").setFontColor("#6B7686");
+  } else {
+    var direccionActual = null;
+    fotos.forEach(function (f) {
+      if (f.direccion !== direccionActual) {
+        direccionActual = f.direccion;
+        hoja.getRange(fila, 1, 1, COLS).merge().setValue(direccionActual)
+          .setFontWeight("bold").setBackground("#1F4E78").setFontColor("#FFFFFF")
+          .setHorizontalAlignment("center");
+        fila++;
+      }
+
+      var etiqueta = "Imagen " + f.numero + "  —  " + f.item + " — " + f.descripcion +
+        (f.observacion ? " (" + f.observacion + ")" : "");
+      hoja.getRange(fila, 1, 1, COLS).merge().setValue(etiqueta)
+        .setFontWeight("bold").setHorizontalAlignment("center").setWrap(true);
+      fila++;
+
+      f.filaRegistro = fila;
+      var miniaturaUrl = miniaturaFoto_(f.fotoUrl);
+      hoja.getRange(fila, 1, 1, COLS).merge().setHorizontalAlignment("center").setVerticalAlignment("middle");
+      if (miniaturaUrl) {
+        hoja.getRange(fila, 1).setFormula('=IMAGE("' + miniaturaUrl + '";1)');
+      } else if (f.fotoUrl) {
+        hoja.getRange(fila, 1).setFormula('=HYPERLINK("' + f.fotoUrl + '";"Ver foto")');
+      }
+      hoja.setRowHeight(fila, 260);
+      fila += 2;
+    });
+  }
+
+  for (var c = 1; c <= COLS; c++) hoja.setColumnWidth(c, 160);
+
+  ss.setActiveSheet(hoja);
+  ss.moveActiveSheet(4);
+
+  return hoja.getSheetId();
+}
+
+function miniaturaFoto_(fotoUrl) {
+  var m = (fotoUrl || "").match(/\/d\/([^/]+)/);
+  return m ? "https://drive.google.com/thumbnail?id=" + m[1] + "&sz=w600" : "";
 }
 
 function jsonOutput_(obj) {
