@@ -784,8 +784,15 @@ async function recargarDireccionYItem(itemKeyOverride) {
   obraActual = data;
   const dir = obraActual.direcciones.find((d) => d.nombre === direccionActual.nombre);
   direccionActual = dir;
+  // Google Sheets devuelve el numero de item como Number cuando la celda
+  // "parece" numerica (ej. 3, 1.1) y como String cuando no (ej. "1.4A"), asi
+  // que comparar con === puede fallar por tipos aunque el valor sea "igual"
+  // (3 !== "3"). Esto importa sobre todo aqui porque itemKeyOverride viene
+  // de un <input type="text"> (guardarEdicionItem), siempre String. Se
+  // compara como texto en ambos lados para que la comparacion no dependa de
+  // como Sheets decidio tipar esa celda.
   const claveBuscada = itemKeyOverride || itemActual.item;
-  const it = dir ? dir.items.find((x) => x.item === claveBuscada) : null;
+  const it = dir ? dir.items.find((x) => String(x.item) === String(claveBuscada)) : null;
   if (it) itemActual = it;
 }
 
@@ -864,7 +871,10 @@ function miniaturaFoto_(fotoUrl) {
 
 function renderHistorialMedidas() {
   const cont = document.getElementById("listaMedidas");
-  const medidas = obraActual.medidas.filter((m) => m.direccion === direccionActual.nombre && m.item === itemActual.item);
+  // String(...) por el mismo motivo que en recargarDireccionYItem: Sheets
+  // puede devolver el numero de item como Number o como String segun como
+  // haya quedado formateada la celda.
+  const medidas = obraActual.medidas.filter((m) => m.direccion === direccionActual.nombre && String(m.item) === String(itemActual.item));
   if (!medidas.length) {
     cont.innerHTML = '<div class="empty">Todavía no hay medidas registradas para este item.</div>';
     return;
