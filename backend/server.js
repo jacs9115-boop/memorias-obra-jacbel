@@ -111,6 +111,19 @@ app.post("/api/medidas", async (req, res) => {
   }
 });
 
+app.put("/api/obras/:obraId/items", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const { direccion, itemViejo } = req.body;
+    if (!direccion || !itemViejo) return res.status(400).json({ error: "Falta direccion o itemViejo" });
+    const data = await llamarAppsScriptPost({ accion: "editar_item", obraId: req.params.obraId, ...req.body });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
 app.put("/api/medidas/:medidaId", async (req, res) => {
   try {
     requireAppsScriptUrl();

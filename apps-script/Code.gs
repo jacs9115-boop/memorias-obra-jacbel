@@ -22,6 +22,7 @@ function doPost(e) {
     if (body.accion === "editar_medida") return jsonOutput_(editarMedida_(body));
     if (body.accion === "borrar_medida") return jsonOutput_(borrarMedida_(body));
     if (body.accion === "borrar_obra") return jsonOutput_(borrarObra_(body));
+    if (body.accion === "editar_item") return jsonOutput_(editarItemPresupuesto_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -123,22 +124,46 @@ function separarFotos_(fotoUrlCombinada) {
   return t.split("|").map(function (u) { return u.trim(); }).filter(function (u) { return u; });
 }
 
+// El error de Apps Script "The string did not match the expected pattern."
+// al llamar Utilities.base64Decode() es casi siempre un base64 mal formado:
+// longitud que no es multiplo de 4, caracteres fuera del alfabeto base64
+// (por ejemplo si en el camino quedaron saltos de linea o espacios), o el
+// payload llego incompleto porque la conexion del celular se corto a medio
+// subir la foto. Antes de decodificar, se limpia y se valida el formato; si
+// no pasa, esa foto en particular se salta (no se pierde la medida completa
+// por una sola foto con problemas) y se informa en "fallos" para que el
+// front la reporte al usuario.
+function base64Valido_(s) {
+  var limpio = String(s || "").replace(/\s+/g, "");
+  if (!limpio) return null;
+  if (limpio.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(limpio)) return null;
+  return limpio;
+}
+
 function subirFotos_(fotos) {
-  if (!fotos || !fotos.length) return [];
+  var resultado = { urls: [], fallos: [] };
+  if (!fotos || !fotos.length) return resultado;
   var carpetaId = carpetaFotos_();
-  var urls = [];
-  fotos.forEach(function (f) {
+  fotos.forEach(function (f, idx) {
     if (!f || !f.base64) return;
-    var blob = Utilities.newBlob(
-      Utilities.base64Decode(f.base64),
-      f.tipo || "image/jpeg",
-      (f.nombre || "foto") + ".jpg"
-    );
-    var archivo = DriveApp.getFolderById(carpetaId).createFile(blob);
-    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    urls.push(archivo.getUrl());
+    try {
+      var b64 = base64Valido_(f.base64);
+      if (!b64) throw new Error("base64 invalido o incompleto");
+      var blob = Utilities.newBlob(
+        Utilities.base64Decode(b64),
+        f.tipo || "image/jpeg",
+        (f.nombre || "foto_" + idx) + ".jpg"
+      );
+      var archivo = DriveApp.getFolderById(carpetaId).createFile(blob);
+      archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      resultado.urls.push(archivo.getUrl());
+    } catch (err) {
+      Logger.log("Foto " + idx + " no se pudo subir: " + err);
+      resultado.fallos.push({ nombre: (f && f.nombre) || ("foto_" + idx), error: String(err) });
+    }
   });
-  return urls;
+  return resultado;
 }
 
 function normalizarEncabezadoTabla_(v) {
@@ -157,6 +182,7 @@ function extraerValorConDosPuntos_(texto) {
   if (idx === -1) return texto;
   return texto.substring(idx + 1).trim();
 }
+
 function parsearPresupuesto_(fileId) {
   var filas = convertirYLeer_(fileId);
 
@@ -219,6 +245,11 @@ function parsearPresupuesto_(fileId) {
           unidad: undVal,
           cantidadPresupuestada: cantVal,
           capitulo: capituloActual,
+          // Fila real (1-based) dentro del archivo original donde esta este
+          // item, para poder editarlo despues sin ambiguedad (ver
+          // actualizarFilaPresupuestoOriginal_). Corresponde a la misma
+          // fila en el archivo .xls/.xlsx tal como Drive lo convierte.
+          filaOrigen: i2 + 1,
         });
       } else {
         capituloActual = descVal;
@@ -237,7 +268,12 @@ function obtenerHojaIndice_() {
   var hoja = ss.getSheetByName("Obras");
   if (!hoja) {
     hoja = ss.insertSheet("Obras");
-    hoja.appendRow(["ObraId", "Nombre", "SpreadsheetId", "NumeroContrato", "Objeto", "Contratista", "Supervisor", "FechaCreacion"]);
+    hoja.appendRow(["ObraId", "Nombre", "SpreadsheetId", "NumeroContrato", "Objeto", "Contratista", "Supervisor", "FechaCreacion", "FileIdPresupuesto"]);
+  } else if (!normalizarTexto_(hoja.getRange(1, 9).getValue())) {
+    // Compatibilidad con hojas "Obras" creadas antes de agregar esta
+    // columna: se le pone el encabezado sin tocar las filas existentes (esas
+    // obras quedan con FileIdPresupuesto vacio hasta que se vuelvan a crear).
+    hoja.getRange(1, 9).setValue("FileIdPresupuesto");
   }
   return hoja;
 }
@@ -246,11 +282,12 @@ function listarObras_() {
   var hoja = obtenerHojaIndice_();
   var lastRow = hoja.getLastRow();
   if (lastRow < 2) return [];
-  var valores = hoja.getRange(2, 1, lastRow - 1, 8).getValues();
+  var valores = hoja.getRange(2, 1, lastRow - 1, 9).getValues();
   return valores.filter(function (r) { return r[0]; }).map(function (r) {
     return {
       obraId: r[0], nombre: r[1], spreadsheetId: r[2], numeroContrato: r[3],
       objeto: r[4], contratista: r[5], supervisor: r[6], fechaCreacion: r[7],
+      fileIdPresupuesto: r[8] || "",
     };
   });
 }
@@ -262,6 +299,7 @@ function buscarObra_(obraId) {
   }
   return null;
 }
+
 // ---------- Crear una obra nueva a partir de un presupuesto ----------
 
 function crearObra_(body) {
@@ -293,14 +331,18 @@ function crearObra_(body) {
   hojaConfig.setColumnWidth(2, 420);
 
   var hojaPres = ss.insertSheet("Presupuesto");
-  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada"]];
+  // La columna "Fila Origen" (numero de fila dentro del archivo original en
+  // Drive) es lo que permite despues editar un item desde la app y que el
+  // cambio se escriba tambien en ese archivo original, sin tener que
+  // adivinar cual fila es por texto (ver editarItemPresupuesto_).
+  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada", "Fila Origen"]];
   datos.direcciones.forEach(function (d) {
     d.items.forEach(function (it) {
-      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada]);
+      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || ""]);
     });
   });
-  hojaPres.getRange(1, 1, filasPres.length, 6).setValues(filasPres);
-  hojaPres.getRange(1, 1, 1, 6).setFontWeight("bold");
+  hojaPres.getRange(1, 1, filasPres.length, 7).setValues(filasPres);
+  hojaPres.getRange(1, 1, 1, 7).setFontWeight("bold");
   hojaPres.setFrozenRows(1);
 
   var hojaMemoria = ss.insertSheet("Memoria");
@@ -314,7 +356,7 @@ function crearObra_(body) {
   var hojaIndice = obtenerHojaIndice_();
   var obraId = Utilities.getUuid();
   hojaIndice.appendRow([obraId, nombreObra, ssId, datos.meta.numeroContrato, datos.meta.objeto,
-    datos.meta.contratista, datos.meta.supervisor, new Date().toISOString()]);
+    datos.meta.contratista, datos.meta.supervisor, new Date().toISOString(), fileId]);
 
   return { ok: true, obraId: obraId, totalDirecciones: datos.direcciones.length };
 }
@@ -343,7 +385,7 @@ function leerObra_(obraId) {
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
-  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 6).getValues() : [];
+  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 7).getValues() : [];
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
@@ -381,6 +423,7 @@ function leerObra_(obraId) {
     direccionesMap[direccion].push({
       capitulo: r[1], item: r[2], descripcion: r[3], unidad: r[4],
       cantidadPresupuestada: r[5], cantidadEjecutada: totales[clave] || 0,
+      filaOrigen: r[6] || "",
     });
   });
   var direcciones = ordenDirecciones.map(function (nombre) {
@@ -389,6 +432,7 @@ function leerObra_(obraId) {
 
   return { obra: obra, direcciones: direcciones, medidas: medidas };
 }
+
 // ---------- Medidas (memoria de calculo) ----------
 
 function guardarMedida_(body) {
@@ -398,7 +442,7 @@ function guardarMedida_(body) {
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hoja = ss.getSheetByName("Memoria");
 
-  var fotosUrls = subirFotos_(body.fotos);
+  var subida = subirFotos_(body.fotos);
 
   var id = Utilities.getUuid();
   var ahora = new Date();
@@ -407,12 +451,12 @@ function guardarMedida_(body) {
   var fila = [
     id, fechaHora, body.direccion || "", body.item || "", body.descripcion || "", body.unidad || "",
     body.longitud || "", body.ancho || "", body.alto || "", body.volumen || "", body.distanciaKm || "",
-    Number(body.cantidad) || 0, fotosUrls.join("|"), body.observacion || "",
+    Number(body.cantidad) || 0, subida.urls.join("|"), body.observacion || "",
   ];
   hoja.appendRow(fila);
   regenerarMemoriaCalculo_(ss);
 
-  return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: fotosUrls };
+  return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: subida.urls, fotosFallidas: subida.fallos };
 }
 
 function editarMedida_(body) {
@@ -438,14 +482,14 @@ function editarMedida_(body) {
       hoja.getRange(fila, 10).setValue(body.volumen || "");
       hoja.getRange(fila, 11).setValue(body.distanciaKm || "");
       hoja.getRange(fila, 12).setValue(Number(body.cantidad) || 0);
-      var fotosNuevas = subirFotos_(body.fotos);
-      if (fotosNuevas.length) {
+      var subida = subirFotos_(body.fotos);
+      if (subida.urls.length) {
         var fotosActuales = separarFotos_(hoja.getRange(fila, 13).getValue());
-        hoja.getRange(fila, 13).setValue(fotosActuales.concat(fotosNuevas).join("|"));
+        hoja.getRange(fila, 13).setValue(fotosActuales.concat(subida.urls).join("|"));
       }
       hoja.getRange(fila, 14).setValue(body.observacion || "");
       regenerarMemoriaCalculo_(ss);
-      return { ok: true };
+      return { ok: true, fotosFallidas: subida.fallos };
     }
   }
   return { ok: false, error: "Medida no encontrada" };
@@ -470,6 +514,132 @@ function borrarMedida_(body) {
   }
   return { ok: false, error: "Medida no encontrada" };
 }
+
+// ---------- Editar un item del presupuesto (unidad/descripcion/numero) ----------
+//
+// Permite corregir desde la app un item que quedo mal capturado al leer el
+// presupuesto original (tipico: la columna UND vino vacia por error de
+// captura, o el numero de item quedo mal escrito). Actualiza tres lugares
+// para que todo quede consistente:
+//  1. La hoja "Presupuesto" de la obra (la copia que usa la app).
+//  2. Las filas de "Memoria" que ya tenian mediciones cargadas contra el
+//     item viejo, para que no queden huerfanas (el cruce con el
+//     presupuesto se hace por direccion+item; si no se migran, esas
+//     mediciones dejarian de sumar contra el item corregido).
+//  3. El archivo original en Drive (el .xls/.xlsx que se uso para crear la
+//     obra), en la fila exacta de donde salio ese item -- solo si se
+//     conoce esa fila (obras creadas despues de agregar este seguimiento;
+//     ver parsearPresupuesto_ / crearObra_) y si el archivo todavia existe.
+// El paso 3 es el unico que puede fallar sin perder el resto del cambio
+// (por eso va envuelto en try/catch): si falla, el item queda igual
+// corregido en la app, y se devuelve un aviso de que el archivo original no
+// se pudo actualizar.
+function editarItemPresupuesto_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+
+  var direccion = normalizarTexto_(body.direccion);
+  var itemViejo = normalizarTexto_(body.itemViejo);
+  if (!direccion || !itemViejo) return { ok: false, error: "Falta dirección o item a editar" };
+
+  var itemNuevo = normalizarTexto_(body.item) || itemViejo;
+  var descripcionNueva = body.descripcion != null && normalizarTexto_(body.descripcion) ? normalizarTexto_(body.descripcion) : null;
+  var unidadNueva = body.unidad != null ? normalizarTexto_(body.unidad) : null;
+
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hojaPres = ss.getSheetByName("Presupuesto");
+  var lastRow = hojaPres.getLastRow();
+  if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
+
+  var valores = hojaPres.getRange(2, 1, lastRow - 1, 7).getValues();
+  var filaEncontrada = -1;
+  var filaOrigen = "";
+  for (var i = 0; i < valores.length; i++) {
+    if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === itemViejo) {
+      filaEncontrada = i + 2;
+      filaOrigen = valores[i][6];
+      break;
+    }
+  }
+  if (filaEncontrada === -1) return { ok: false, error: "No se encontró ese item en el presupuesto de la obra" };
+
+  hojaPres.getRange(filaEncontrada, 3).setValue(itemNuevo);
+  if (descripcionNueva !== null) hojaPres.getRange(filaEncontrada, 4).setValue(descripcionNueva);
+  if (unidadNueva !== null) hojaPres.getRange(filaEncontrada, 5).setValue(unidadNueva);
+
+  var hojaMemoria = ss.getSheetByName("Memoria");
+  var lastRowMem = hojaMemoria.getLastRow();
+  if (lastRowMem > 1) {
+    var valoresMem = hojaMemoria.getRange(2, 1, lastRowMem - 1, 14).getValues();
+    for (var j = 0; j < valoresMem.length; j++) {
+      if (normalizarTexto_(valoresMem[j][2]) === direccion && normalizarTexto_(valoresMem[j][3]) === itemViejo) {
+        var filaMem = j + 2;
+        hojaMemoria.getRange(filaMem, 4).setValue(itemNuevo);
+        if (descripcionNueva !== null) hojaMemoria.getRange(filaMem, 5).setValue(descripcionNueva);
+        if (unidadNueva !== null) hojaMemoria.getRange(filaMem, 6).setValue(unidadNueva);
+      }
+    }
+  }
+
+  regenerarMemoriaCalculo_(ss);
+
+  var resultado = { ok: true, masterActualizado: false, avisoMaster: "" };
+  if (obra.fileIdPresupuesto && filaOrigen) {
+    try {
+      actualizarFilaPresupuestoOriginal_(obra.fileIdPresupuesto, Number(filaOrigen), {
+        item: itemNuevo, descripcion: descripcionNueva, unidad: unidadNueva,
+      });
+      resultado.masterActualizado = true;
+    } catch (errMaster) {
+      Logger.log("No se pudo actualizar el archivo original: " + errMaster);
+      resultado.avisoMaster = "El item se corrigió en la obra, pero no se pudo actualizar el archivo original en Drive: " + errMaster;
+    }
+  } else {
+    resultado.avisoMaster = "Esta obra no tiene ligado el archivo original (se creó antes de esta función), así que el cambio solo quedó en la app.";
+  }
+
+  return resultado;
+}
+
+// Reescribe una fila especifica del archivo de presupuesto original (el
+// .xls/.xlsx que el usuario subio a la carpeta "Presupuestos" de Drive): lo
+// convierte temporalmente a Google Sheets (igual que convertirYLeer_), edita
+// la fila indicada, lo vuelve a exportar como Excel y sobreescribe el
+// archivo original -- conserva el mismo ID, nombre, carpeta y permisos de
+// Drive, solo cambia el contenido.
+//
+// OJO: esto asume que las filas del archivo no se han movido desde que se
+// creo la obra (por ejemplo, insertando o borrando filas a mano en Excel
+// despues de crear la obra). Si eso paso, esta funcion editaria la fila
+// equivocada -- por eso las correcciones de item/unidad se deben hacer
+// siempre desde la app una vez la obra ya existe, y no a mano en el archivo
+// original.
+function actualizarFilaPresupuestoOriginal_(fileId, filaOrigen, cambios) {
+  if (!filaOrigen || filaOrigen < 1) throw new Error("Fila de origen inválida");
+
+  var archivoOriginal = DriveApp.getFileById(fileId);
+  var fileBlob = archivoOriginal.getBlob();
+  var resource = { name: "temp_edicion_" + fileId, mimeType: MimeType.GOOGLE_SHEETS };
+  var convertido = Drive.Files.create(resource, fileBlob);
+
+  try {
+    var ssTemp = SpreadsheetApp.openById(convertido.id);
+    var hojaTemp = ssTemp.getSheets()[0];
+    if (hojaTemp.getLastRow() < filaOrigen) {
+      throw new Error("El archivo original ya no tiene esa fila (¿cambió su estructura?)");
+    }
+    if (cambios.item) hojaTemp.getRange(filaOrigen, 2).setValue(cambios.item);
+    if (cambios.descripcion) hojaTemp.getRange(filaOrigen, 3).setValue(cambios.descripcion);
+    if (cambios.unidad) hojaTemp.getRange(filaOrigen, 4).setValue(cambios.unidad);
+    SpreadsheetApp.flush();
+
+    var blobExportado = DriveApp.getFileById(convertido.id).getAs(MimeType.MICROSOFT_EXCEL);
+    Drive.Files.update({}, fileId, blobExportado);
+  } finally {
+    try { Drive.Files.remove(convertido.id); } catch (eLimpieza) { /* no critico */ }
+  }
+}
+
 // Reconstruye por completo la hoja "Memoria de Cálculo": para cada
 // direccion/capitulo/item que tenga al menos una medida cargada, arma una
 // mini-tabla con una fila por medida (columnas Foto/Descripcion/Longitud/
@@ -489,7 +659,7 @@ function regenerarMemoriaCalculo_(ss) {
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
-  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 6).getValues() : [];
+  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 7).getValues() : [];
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
@@ -503,6 +673,17 @@ function regenerarMemoriaCalculo_(ss) {
       longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10],
       cantidad: r[11], fotoUrl: r[12], observacion: r[13],
     });
+  });
+
+  var totalPorItemClave = {};
+  filasPres.forEach(function (r) {
+    var clave = r[0] + "||" + r[2];
+    var medidas = medidasPorItem[clave];
+    if (!medidas || !medidas.length) return;
+    var tipo = tipoUnidad_(r[4]);
+    var suma = 0;
+    medidas.forEach(function (m) { suma += calcularCantidadParcial_(tipo, m); });
+    totalPorItemClave[clave] = suma;
   });
 
   var hojaVieja = ss.getSheetByName(NOMBRE_HOJA);
@@ -587,6 +768,12 @@ function regenerarMemoriaCalculo_(ss) {
   var meta = leerMetaContrato_(ss);
   var gidFotografico = regenerarRegistroFotografico_(ss, fotos, meta);
 
+  try {
+    regenerarEjecucionReal_(ss, meta.numeroContrato, totalPorItemClave);
+  } catch (errEjec) {
+    Logger.log("No se pudo actualizar Ejecucion Real: " + errEjec);
+  }
+
   pendientesFoto.forEach(function (p) {
     var primera = fotos[p.indiceFoto];
     var etiqueta = "Imagen " + p.numeros.join(", ");
@@ -602,6 +789,7 @@ function regenerarMemoriaCalculo_(ss) {
   ss.setActiveSheet(hoja);
   ss.moveActiveSheet(3);
 }
+
 // Mismo criterio que tipoUnidad() en el frontend (frontend/index.html), para
 // saber que formula de calculo le corresponde a cada fila segun su unidad.
 function tipoUnidad_(unidadRaw) {
@@ -665,6 +853,7 @@ function leerMetaContrato_(ss) {
   });
   return meta;
 }
+
 // Reconstruye la hoja "Registro Fotografico": un anexo separado de la
 // Memoria de Calculo para que las fotos se puedan ver grandes y bien
 // presentadas (listas para imprimir/adjuntar) sin desordenar las filas y
@@ -739,6 +928,247 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
 function miniaturaFoto_(fotoUrl) {
   var m = (fotoUrl || "").match(/\/d\/([^/]+)/);
   return m ? "https://drive.google.com/thumbnail?id=" + m[1] + "&sz=w600" : "";
+}
+
+// ---------- Ejecucion Real (presupuesto oficial con precios vs ejecutado) ----------
+//
+// Busca en la carpeta "Presupuestos" (la misma donde el usuario sube el
+// presupuesto SIN precios para crear la obra) un archivo cuyo nombre
+// contenga el numero de contrato de esta obra. Ese archivo es el
+// presupuesto OFICIAL con valores unitarios, un documento aparte que el
+// usuario sube manualmente a esa carpeta (no lo genera la app).
+function buscarPresupuestoOficialPorContrato_(numeroContrato) {
+  if (!numeroContrato) return null;
+  var folder = DriveApp.getFolderById(carpetaPresupuestos_());
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getName().indexOf(numeroContrato) !== -1) return f.getId();
+  }
+  return null;
+}
+
+// regenerarEjecucionReal_ se ejecuta en CADA guardado de medida (a traves de
+// regenerarMemoriaCalculo_), y sin cache eso significa reconvertir el .xlsx
+// del presupuesto oficial de cero (Drive.Files.create + lectura +
+// Drive.Files.remove) cada vez, aunque ese archivo no haya cambiado desde el
+// guardado anterior -- es la parte mas cara de todo el guardado y la
+// principal causa de que "tarda mucho tiempo". En vez de convertir y borrar
+// el archivo temporal cada vez, se guarda una copia "sombra" (Google Sheet)
+// y se reutiliza mientras el archivo original no cambie: se compara contra
+// su fecha de ultima modificacion (getLastUpdated) guardada en
+// PropertiesService. Solo se vuelve a convertir cuando esa fecha cambia
+// (el usuario subio una version nueva del presupuesto oficial).
+function convertirYLeerCacheado_(fileId) {
+  var props = PropertiesService.getScriptProperties();
+  var claveShadow = "shadowSheet_" + fileId;
+  var claveFecha = "shadowFecha_" + fileId;
+  var archivo = DriveApp.getFileById(fileId);
+  var fechaActual = archivo.getLastUpdated().getTime();
+  var shadowId = props.getProperty(claveShadow);
+  var fechaCacheada = Number(props.getProperty(claveFecha) || 0);
+
+  if (shadowId && fechaCacheada === fechaActual) {
+    try {
+      var ssShadow = SpreadsheetApp.openById(shadowId);
+      return ssShadow.getSheets()[0].getDataRange().getValues();
+    } catch (eShadow) {
+      // La copia sombra ya no existe (se borro a mano en Drive); se
+      // regenera abajo como si no hubiera cache.
+    }
+  }
+
+  var fileBlob = archivo.getBlob();
+  var resource = { name: "(cache interno) " + archivo.getName(), mimeType: MimeType.GOOGLE_SHEETS };
+  var nuevoShadow = Drive.Files.create(resource, fileBlob);
+
+  if (shadowId) {
+    try { Drive.Files.remove(shadowId); } catch (eBorrar) { /* ya no existia, sin problema */ }
+  }
+  props.setProperty(claveShadow, nuevoShadow.id);
+  props.setProperty(claveFecha, String(fechaActual));
+
+  return SpreadsheetApp.openById(nuevoShadow.id).getSheets()[0].getDataRange().getValues();
+}
+
+var AIU_KEYWORDS_ = ["TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "UTILIDAD", "COSTO TOTAL OBRA", "COSTO DIRECTO OBRA"];
+
+// Lee y clasifica el presupuesto oficial (con precios) fila por fila:
+// nivel 0 = direccion, 1 = capitulo, 2 = subtitulo sin cantidad propia,
+// 3 = item real (el unico nivel que se cruza contra las medidas de campo),
+// 4 = fila de AIU (Administracion/Imprevistos/Utilidad/Costo total), que
+// solo se muestra de forma informativa (sin ejecucion).
+function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
+  var filasRaw = convertirYLeerCacheado_(fileId);
+  var startIdx = -1;
+  for (var i = 0; i < filasRaw.length; i++) {
+    if (normalizarTexto_(filasRaw[i][1]) === "ITEM") { startIdx = i + 1; break; }
+  }
+  if (startIdx === -1) throw new Error("No se encontro la fila de encabezado ITEM en el presupuesto oficial");
+
+  var filas = [];
+  var direccionCtx = "";
+  for (var i = startIdx; i < filasRaw.length; i++) {
+    var item = filasRaw[i][1], desc = filasRaw[i][2], und = filasRaw[i][3], cant = filasRaw[i][4], vrUnit = filasRaw[i][5], vrParcial = filasRaw[i][6];
+    var itemTxt = (item === "" || item === null || item === undefined) ? "" : String(item);
+    var undTxt = normalizarTexto_(und);
+    var descTxt = normalizarTexto_(desc);
+    if (itemTxt === "" && undTxt === "" && descTxt === "") continue;
+    if (itemTxt === "ITEM" || descTxt === "DESCRIPCION" || descTxt === "DESCRIPCIÓN") continue;
+    var esDireccionConocida = direccionesConocidas[descTxt];
+    var esAIU = AIU_KEYWORDS_.some(function (k) { return descTxt.toUpperCase().indexOf(k) === 0; });
+    var nivel;
+    if (itemTxt === "" && undTxt === "" && esDireccionConocida) { nivel = 0; direccionCtx = descTxt; }
+    else if (itemTxt === "" && undTxt === "" && esAIU) { nivel = 4; }
+    else if (itemTxt === "" && undTxt === "") { continue; }
+    else if (undTxt === "" && /^\d+(\.0)?$/.test(itemTxt)) { nivel = 1; }
+    else if (undTxt === "") { nivel = 2; }
+    else { nivel = 3; }
+    filas.push({
+      nivel: nivel, direccion: direccionCtx, item: itemTxt, descripcion: descTxt, und: undTxt,
+      cant: (cant === "" ? "" : Number(cant)), vrUnit: (vrUnit === "" ? "" : Number(vrUnit)), vrParcial: (vrParcial === "" ? "" : Number(vrParcial)),
+    });
+  }
+  return filas;
+}
+
+function colLetraEjecucionReal_(n) {
+  var s = "";
+  while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+// Reconstruye por completo la hoja "Ejecucion Real": mismo patron que
+// regenerarMemoriaCalculo_ (se borra y se arma de nuevo cada vez que hay un
+// cambio en las medidas), pero cruzando el presupuesto OFICIAL con precios
+// (archivo aparte en la carpeta "Presupuestos") contra totalPorItemClave
+// (cantidad ya ejecutada por direccion+item, calculada en
+// regenerarMemoriaCalculo_ con la misma formula que usa la Memoria de
+// Calculo). Si no se encuentra el presupuesto oficial de esta obra
+// (todavia no se ha subido, o el numero de contrato no coincide con el
+// nombre del archivo), no hace nada -- no rompe el guardado de medidas.
+function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
+  var fileId = buscarPresupuestoOficialPorContrato_(numeroContrato);
+  if (!fileId) {
+    Logger.log("Ejecucion Real: no se encontro presupuesto oficial para el contrato " + numeroContrato);
+    return;
+  }
+
+  var hojaPres = ss.getSheetByName("Presupuesto");
+  var direccionesConocidas = {};
+  var ultimaFilaPres = hojaPres.getLastRow();
+  if (ultimaFilaPres > 1) {
+    hojaPres.getRange(2, 1, ultimaFilaPres - 1, 1).getValues().forEach(function (r) {
+      if (r[0]) direccionesConocidas[normalizarTexto_(r[0])] = true;
+    });
+  }
+
+  var filas = leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas);
+
+  var NOMBRE_HOJA = "Ejecucion Real";
+  var sh = ss.getSheetByName(NOMBRE_HOJA);
+  if (sh) ss.deleteSheet(sh);
+  sh = ss.insertSheet(NOMBRE_HOJA);
+
+  var COL = { ITEM: 1, DESC: 2, UND: 3, CCANT: 4, CVU: 5, CVP: 6, ACANT: 7, AVR: 8, PCANT: 9, PVR: 10, TCANT: 11, TVR: 12, SCANT: 13, SVR: 14 };
+  var HEADER_BG = "#1F4E78";
+
+  sh.getRange(1, COL.ITEM, 2, 1).merge().setValue("ITEM");
+  sh.getRange(1, COL.DESC, 2, 1).merge().setValue("DESCRIPCIÓN");
+  sh.getRange(1, COL.UND, 1, 4).merge().setValue("CONTRATADO");
+  sh.getRange(1, COL.ACANT, 1, 2).merge().setValue("ACU ACTA ANTERIOR");
+  sh.getRange(1, COL.PCANT, 1, 2).merge().setValue("PRESENTE ACTA FINAL");
+  sh.getRange(1, COL.TCANT, 1, 2).merge().setValue("ACUMULADO TOTAL");
+  sh.getRange(1, COL.SCANT, 1, 2).merge().setValue("SALDO");
+
+  var sub2 = {};
+  sub2[COL.UND] = "UNID"; sub2[COL.CCANT] = "CANT"; sub2[COL.CVU] = "VR. UNITARIO"; sub2[COL.CVP] = "VR. PARCIAL";
+  sub2[COL.ACANT] = "CANT"; sub2[COL.AVR] = "VR TOR";
+  sub2[COL.PCANT] = "CANT"; sub2[COL.PVR] = "VR. TOTAL";
+  sub2[COL.TCANT] = "CANT"; sub2[COL.TVR] = "VR. TOTAL";
+  sub2[COL.SCANT] = "CANT"; sub2[COL.SVR] = "VR. TOTAL";
+  Object.keys(sub2).forEach(function (c) { sh.getRange(2, Number(c)).setValue(sub2[c]); });
+
+  sh.getRange(1, 1, 2, 14).setFontWeight("bold").setFontColor("#FFFFFF").setBackground(HEADER_BG).setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+  sh.setFrozenRows(2);
+  sh.setFrozenColumns(2);
+
+  var DATA_START = 3;
+  var numFilas = filas.length;
+  if (numFilas === 0) return;
+  sh.getRange(DATA_START, 1, numFilas, 14).setValues(filas.map(function () { return ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]; }));
+
+  for (var idx = 0; idx < numFilas; idx++) {
+    var f = filas[idx];
+    var row = DATA_START + idx;
+    sh.getRange(row, COL.ITEM).setValue(f.item);
+    sh.getRange(row, COL.DESC).setValue(f.descripcion);
+    sh.getRange(row, COL.UND).setValue(f.und);
+    if (f.cant !== "" && !isNaN(f.cant)) sh.getRange(row, COL.CCANT).setValue(f.cant);
+    if (f.vrUnit !== "" && !isNaN(f.vrUnit)) sh.getRange(row, COL.CVU).setValue(f.vrUnit);
+    if (f.vrParcial !== "" && !isNaN(f.vrParcial)) sh.getRange(row, COL.CVP).setValue(f.vrParcial);
+  }
+
+  for (var idx = 0; idx < numFilas; idx++) {
+    var f = filas[idx];
+    var row = DATA_START + idx;
+    if (f.nivel === 3) {
+      var clave = f.direccion + "||" + f.item;
+      var cantEjecutada = totalPorItemClave[clave] || 0;
+      sh.getRange(row, COL.PCANT).setValue(cantEjecutada);
+      sh.getRange(row, COL.PVR).setFormula("=" + colLetraEjecucionReal_(COL.PCANT) + row + "*" + colLetraEjecucionReal_(COL.CVU) + row);
+      sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
+      sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
+      sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
+      sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+    } else if (f.nivel === 1) {
+      var finRel = numFilas;
+      for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel <= 1) { finRel = j; break; } }
+      var filaIni = DATA_START + idx + 1;
+      var filaFin = DATA_START + finRel - 1;
+      if (filaFin >= filaIni) {
+        sh.getRange(row, COL.PCANT).setFormula("=SUM(" + colLetraEjecucionReal_(COL.PCANT) + filaIni + ":" + colLetraEjecucionReal_(COL.PCANT) + filaFin + ")");
+        sh.getRange(row, COL.PVR).setFormula("=SUM(" + colLetraEjecucionReal_(COL.PVR) + filaIni + ":" + colLetraEjecucionReal_(COL.PVR) + filaFin + ")");
+        sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
+        sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
+        sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
+        sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+      }
+    } else if (f.nivel === 0) {
+      var finRel0 = numFilas;
+      for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel === 0) { finRel0 = j; break; } }
+      var capRows = [];
+      for (var j = idx + 1; j < finRel0; j++) { if (filas[j].nivel === 1) capRows.push(DATA_START + j); }
+      if (capRows.length > 0) {
+        sh.getRange(row, COL.PCANT).setFormula("=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PCANT) + r; }).join(",") + ")");
+        sh.getRange(row, COL.PVR).setFormula("=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PVR) + r; }).join(",") + ")");
+        sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
+        sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
+        sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
+        sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+      }
+    }
+  }
+
+  for (var idx = 0; idx < numFilas; idx++) {
+    var f = filas[idx];
+    var row = DATA_START + idx;
+    var r = sh.getRange(row, 1, 1, 14);
+    if (f.nivel === 0) { r.setBackground("#1F4E78").setFontColor("#FFFFFF").setFontWeight("bold"); }
+    else if (f.nivel === 1) { r.setBackground("#D9E1F2").setFontWeight("bold"); }
+    else if (f.nivel === 2) { r.setBackground("#FCE4D6").setFontStyle("italic"); }
+    else if (f.nivel === 4) { r.setBackground("#F2F2F2").setFontStyle("italic"); }
+  }
+
+  [COL.CVU, COL.CVP, COL.AVR, COL.PVR, COL.TVR, COL.SVR].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("$#,##0"); });
+  [COL.CCANT, COL.ACANT, COL.PCANT, COL.TCANT, COL.SCANT].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("#,##0.00"); });
+
+  sh.setColumnWidth(COL.ITEM, 55);
+  sh.setColumnWidth(COL.DESC, 320);
+  sh.setColumnWidths(COL.UND, 13, 90);
+
+  ss.setActiveSheet(sh);
+  ss.moveActiveSheet(5);
 }
 
 function jsonOutput_(obj) {

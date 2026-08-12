@@ -189,6 +189,7 @@
 </main>
 
 <div class="toast" id="toast"></div>
+
 <script>
 const API_BASE = "";
 
@@ -280,6 +281,7 @@ document.getElementById("btnNuevaObra").addEventListener("click", () => {
   document.getElementById("btnPrevisualizar").disabled = true;
   cargarPresupuestos();
 });
+
 // ---------- Vista: nueva obra ----------
 async function cargarPresupuestos() {
   const cont = document.getElementById("listaPresupuestos");
@@ -367,6 +369,7 @@ document.getElementById("btnCrearObra").addEventListener("click", async () => {
     btn.textContent = "Crear obra";
   }
 });
+
 // ---------- Vista: detalle de obra ----------
 async function abrirObra(obraId) {
   navegarA("vistaObraDetalle", "Cargando...");
@@ -458,6 +461,7 @@ function renderDireccion() {
     el.addEventListener("click", () => abrirItem(direccionActual.items[Number(el.dataset.idx)]));
   });
 }
+
 // ---------- Vista: item (formulario + historial) ----------
 function tipoUnidad(unidadRaw) {
   const u = (unidadRaw || "").trim().toUpperCase().replace(/[.\s]/g, "");
@@ -497,11 +501,85 @@ function prepararFormularioNuevaMedida() {
 
 function renderItemInfo() {
   document.getElementById("cardItemInfo").innerHTML = `
-    <h2>${itemActual.item} — ${itemActual.descripcion}</h2>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <h2 style="margin:0 0 12px">${itemActual.item} — ${itemActual.descripcion}</h2>
+      <button type="button" id="btnEditarItem" title="Editar item" style="background:none;border:none;font-size:17px;flex-shrink:0;padding:2px 4px">✏️</button>
+    </div>
     <div class="config-fila"><span class="k">Unidad</span><span class="v">${itemActual.unidad || "(sin definir en el presupuesto)"}</span></div>
     <div class="config-fila"><span class="k">Presupuestado</span><span class="v">${formatoNumero(itemActual.cantidadPresupuestada)}</span></div>
     <div class="config-fila"><span class="k">Ejecutado</span><span class="v"><b>${formatoNumero(itemActual.cantidadEjecutada)}</b></span></div>
+    <div id="formEditarItem" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div class="field"><label>Número de item</label><input type="text" id="campoEditarNumero" /></div>
+      <div class="field"><label>Descripción</label><input type="text" id="campoEditarDescripcion" /></div>
+      <div class="field"><label>Unidad (ej: M3, M2, ML, UND, DÍAS)</label><input type="text" id="campoEditarUnidad" /></div>
+      <div class="empty" style="padding:0 0 10px;font-size:11.5px;text-align:left">
+        Corrige aquí si el item quedó mal capturado al leer el presupuesto (por ejemplo, sin unidad). El cambio queda en esta obra y, si es posible, también se actualiza el archivo de presupuesto original en Drive.
+      </div>
+      <button type="button" class="btn-primary" id="btnGuardarEdicionItem">Guardar cambios del item</button>
+      <button type="button" class="btn-secondary" id="btnCancelarEdicionItem">Cancelar</button>
+    </div>
   `;
+  document.getElementById("campoEditarNumero").value = itemActual.item || "";
+  document.getElementById("campoEditarDescripcion").value = itemActual.descripcion || "";
+  document.getElementById("campoEditarUnidad").value = itemActual.unidad || "";
+}
+
+// Delegacion de eventos sobre el contenedor: renderItemInfo() reemplaza su
+// innerHTML cada vez (al entrar al item, al cancelar, al guardar una
+// medida...), asi que un listener puesto directo sobre los botones se
+// perderia en el siguiente render. Puesto una sola vez sobre el contenedor
+// fijo, sigue funcionando sin importar cuantas veces se regenere el HTML de
+// adentro.
+document.getElementById("cardItemInfo").addEventListener("click", (e) => {
+  if (e.target.id === "btnEditarItem") {
+    document.getElementById("formEditarItem").style.display = "block";
+  } else if (e.target.id === "btnCancelarEdicionItem") {
+    document.getElementById("formEditarItem").style.display = "none";
+  } else if (e.target.id === "btnGuardarEdicionItem") {
+    guardarEdicionItem();
+  }
+});
+
+async function guardarEdicionItem() {
+  const nuevoItem = document.getElementById("campoEditarNumero").value.trim();
+  const nuevaDescripcion = document.getElementById("campoEditarDescripcion").value.trim();
+  const nuevaUnidad = document.getElementById("campoEditarUnidad").value.trim();
+  if (!nuevoItem) { mostrarToast("El número de item no puede quedar vacío", true); return; }
+
+  const btn = document.getElementById("btnGuardarEdicionItem");
+  btn.disabled = true;
+  btn.textContent = "Guardando...";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/items`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        direccion: direccionActual.nombre,
+        itemViejo: itemActual.item,
+        item: nuevoItem,
+        descripcion: nuevaDescripcion,
+        unidad: nuevaUnidad,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al editar el item");
+    await recargarDireccionYItem(nuevoItem);
+    if (pilaNavegacion.length) {
+      pilaNavegacion[pilaNavegacion.length - 1].titulo = itemActual.item;
+      document.getElementById("tituloHeader").textContent = itemActual.item;
+    }
+    if (data.masterActualizado) {
+      mostrarToast("Item corregido ✓ (también se actualizó el archivo original en Drive)");
+    } else {
+      mostrarToast(data.avisoMaster || "Item corregido en la obra ✓", !!data.avisoMaster);
+    }
+    renderDireccion(); // refresca la lista de items de la direccion (unidad/numero) para cuando se vuelva atras
+    prepararFormularioNuevaMedida();
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Guardar cambios del item";
+  }
 }
 
 const TIPOS_CON_CANTIDAD_VECES = ["longitud", "area", "volumen", "volumen_km"];
@@ -545,6 +623,7 @@ function renderCamposMedida() {
   cont.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", recalcularCantidad));
   recalcularCantidad();
 }
+
 function valorCampo(id) {
   const el = document.getElementById(id);
   return el ? (Number(el.value) || 0) : 0;
@@ -594,17 +673,94 @@ document.getElementById("btnAgregarFoto").addEventListener("click", () => {
   document.getElementById("inputFoto").click();
 });
 
-document.getElementById("inputFoto").addEventListener("change", (e) => {
+// Las fotos de camara de un celular actual pesan varios MB (a veces 8-12MB).
+// Enviarlas tal cual en base64 (que ya de por si pesa ~33% mas que el
+// archivo) hace el guardado lento en 4G y aumenta el riesgo de que la
+// peticion se corte a medio camino, lo que en Apps Script termina como el
+// error "The string did not match the expected pattern." al decodificar un
+// base64 incompleto.
+//
+// Para la memoria de obra las fotos solo se ven como miniatura (en la app y
+// en la hoja "Registro Fotografico", que las incrusta a 600px de ancho via
+// IMAGE()) o como respaldo si alguien abre el link de Drive; no hace falta
+// resolucion de camara para eso. Por eso se redimensionan a maximo 1280px de
+// lado mayor y se comprimen como JPEG, con reintentos: se empieza en calidad
+// 0.6 y, si la foto sigue pesando mas de ~260KB (fotos con mucho detalle),
+// se vuelve a comprimir mas fuerte (hasta calidad 0.22) en vez de subirla
+// pesada. Con esto una foto de camara tipica (3000x4000, 4-8MB) queda en
+// 40-150KB, y el guardado pasa de tardar decenas de segundos a 1-2 segundos.
+const FOTO_LADO_MAXIMO = 1280;
+const FOTO_PESO_OBJETIVO_BYTES = 260 * 1024;
+const FOTO_CALIDADES_REINTENTO = [0.6, 0.45, 0.32, 0.22];
+
+function tamanoBase64Bytes(base64) {
+  const limpio = base64.replace(/=+$/, "");
+  return Math.floor((limpio.length * 3) / 4);
+}
+
+function comprimirImagen(file) {
+  return new Promise((resolve) => {
+    const nombreFallback = () => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ base64: reader.result.split(",")[1], tipo: file.type || "image/jpeg", dataUrl: reader.result });
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    };
+    try {
+      const img = new Image();
+      const urlObjeto = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(urlObjeto);
+        let { width, height } = img;
+        if (width <= 0 || height <= 0) { nombreFallback(); return; }
+        const escala = Math.min(1, FOTO_LADO_MAXIMO / Math.max(width, height));
+        const w = Math.round(width * escala);
+        const h = Math.round(height * escala);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+
+        let dataUrl = null;
+        for (const calidad of FOTO_CALIDADES_REINTENTO) {
+          const intento = canvas.toDataURL("image/jpeg", calidad);
+          if (!intento || intento.indexOf(",") === -1) continue;
+          dataUrl = intento;
+          if (tamanoBase64Bytes(intento.split(",")[1]) <= FOTO_PESO_OBJETIVO_BYTES) break;
+        }
+        if (!dataUrl) { nombreFallback(); return; }
+        resolve({ base64: dataUrl.split(",")[1], tipo: "image/jpeg", dataUrl });
+      };
+      img.onerror = () => { URL.revokeObjectURL(urlObjeto); nombreFallback(); };
+      img.src = urlObjeto;
+    } catch (e) {
+      nombreFallback();
+    }
+  });
+}
+
+document.getElementById("inputFoto").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const tipo = file.type || "image/jpeg";
-  const reader = new FileReader();
-  reader.onload = () => {
-    fotosActuales.push({ base64: reader.result.split(",")[1], tipo, dataUrl: reader.result });
-    renderPreviewFotos();
-    document.getElementById("inputFoto").value = "";
-  };
-  reader.readAsDataURL(file);
+  const inputFoto = document.getElementById("inputFoto");
+  const btnAgregarFoto = document.getElementById("btnAgregarFoto");
+  const textoOriginal = btnAgregarFoto.textContent;
+  btnAgregarFoto.disabled = true;
+  btnAgregarFoto.textContent = "Procesando foto...";
+  try {
+    const foto = await comprimirImagen(file);
+    if (foto) {
+      fotosActuales.push(foto);
+      renderPreviewFotos();
+    } else {
+      mostrarToast("No se pudo procesar esa foto, intenta con otra", true);
+    }
+  } finally {
+    inputFoto.value = "";
+    btnAgregarFoto.disabled = false;
+    btnAgregarFoto.textContent = textoOriginal;
+  }
 });
 
 function renderPreviewFotos() {
@@ -622,13 +778,14 @@ function renderPreviewFotos() {
   });
 }
 
-async function recargarDireccionYItem() {
+async function recargarDireccionYItem(itemKeyOverride) {
   const res = await fetch(`${API_BASE}/api/obras/${encodeURIComponent(obraActual.obra.obraId)}`);
   const data = await res.json();
   obraActual = data;
   const dir = obraActual.direcciones.find((d) => d.nombre === direccionActual.nombre);
   direccionActual = dir;
-  const it = dir ? dir.items.find((x) => x.item === itemActual.item) : null;
+  const claveBuscada = itemKeyOverride || itemActual.item;
+  const it = dir ? dir.items.find((x) => x.item === claveBuscada) : null;
   if (it) itemActual = it;
 }
 
@@ -637,6 +794,7 @@ function valorCantidadColumna() {
   if (TIPOS_CON_CANTIDAD_VECES.includes(tipo)) return obtenerCantidadVeces();
   return calcularBase();
 }
+
 document.getElementById("btnGuardarMedida").addEventListener("click", async () => {
   const parcial = calcularCantidadParcial();
   if (!parcial || parcial <= 0) { mostrarToast("Ingresa una medida válida", true); return; }
@@ -663,7 +821,9 @@ document.getElementById("btnGuardarMedida").addEventListener("click", async () =
   }
 
   const btn = document.getElementById("btnGuardarMedida");
+  const textoOriginalBtn = btn.textContent;
   btn.disabled = true;
+  btn.textContent = fotosActuales.length ? "Subiendo foto(s) y guardando..." : "Guardando...";
   try {
     let res;
     if (medidaEnEdicion) {
@@ -675,15 +835,25 @@ document.getElementById("btnGuardarMedida").addEventListener("click", async () =
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
     }
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error(`El servidor respondió con un error inesperado (${res.status}). Intenta de nuevo.`);
+    }
     if (!data.ok) throw new Error(data.error || "Error al guardar");
-    mostrarToast(medidaEnEdicion ? "Medida actualizada ✓" : "Medida guardada ✓");
+    if (data.fotosFallidas && data.fotosFallidas.length) {
+      mostrarToast(`Medida guardada, pero ${data.fotosFallidas.length} foto(s) no se pudieron subir. Intenta agregarlas de nuevo.`, true);
+    } else {
+      mostrarToast(medidaEnEdicion ? "Medida actualizada ✓" : "Medida guardada ✓");
+    }
     await recargarDireccionYItem();
     prepararFormularioNuevaMedida();
   } catch (err) {
     mostrarToast("Error: " + err.message, true);
   } finally {
     btn.disabled = false;
+    btn.textContent = textoOriginalBtn;
   }
 });
 
@@ -741,6 +911,7 @@ function renderHistorialMedidas() {
     });
   });
 }
+
 function cargarMedidaParaEditar(m) {
   medidaEnEdicion = m.id;
   document.getElementById("tituloFormularioMedida").textContent = "Editar medida";
