@@ -301,6 +301,63 @@ function buscarObra_(obraId) {
   return null;
 }
 
+// ---------- Reportes en segundo plano ----------
+//
+// "Memoria de Calculo", "Registro Fotografico" y "Ejecucion Real" son solo
+// para cuando alguien abre el Google Sheet directamente (imprimir/compartir
+// el informe) -- la app nunca lee esas hojas, calcula todo en memoria
+// directo desde "Memoria" cada vez (ver leerObra_). Por eso no hace falta
+// que esten al dia al instante: en vez de reconstruirlas en el momento del
+// guardado (lo que hacia sentir lenta la app), cada accion que cambia datos
+// marca la obra aqui como "pendiente", y un disparador por tiempo
+// (actualizarReportesPendientes_) las reconstruye solo cada pocos minutos.
+//
+// CONFIGURACION (una sola vez, manual): en el editor de Apps Script, icono
+// del reloj/alarma ("Activadores") en la barra izquierda -> "+ Añadir
+// activador" -> Función a ejecutar: actualizarReportesPendientes_ ->
+// Origen del evento: Basado en tiempo -> Tipo: Temporizador de minutos ->
+// Cada 5 minutos -> Guardar. Sin ese paso, las hojas de reporte se quedan
+// desactualizadas hasta que alguien abra la obra... en realidad ni
+// siquiera entonces (leerObra_ ya no las reconstruye tampoco); por eso el
+// disparador es necesario para que se pongan al dia solas.
+function marcarObraPendiente_(obraId) {
+  if (!obraId) return;
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty("obrasPendientes");
+  var lista = raw ? JSON.parse(raw) : [];
+  if (lista.indexOf(obraId) === -1) {
+    lista.push(obraId);
+    props.setProperty("obrasPendientes", JSON.stringify(lista));
+  }
+}
+
+// Punto de entrada del disparador por tiempo. Recorre las obras marcadas
+// como pendientes y reconstruye sus hojas de reporte. Se quita la marca
+// ANTES de procesar (no despues) para que, si algo vuelve a cambiar esa
+// obra mientras esta funcion esta corriendo, quede marcada de nuevo para
+// la siguiente pasada en vez de perderse.
+function actualizarReportesPendientes_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty("obrasPendientes");
+  if (!raw) return;
+  var lista = JSON.parse(raw);
+  if (!lista.length) return;
+
+  props.deleteProperty("obrasPendientes");
+
+  lista.forEach(function (obraId) {
+    try {
+      var obra = buscarObra_(obraId);
+      if (!obra) return;
+      var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+      regenerarMemoriaCalculo_(ss);
+    } catch (err) {
+      Logger.log("No se pudo actualizar reportes de la obra " + obraId + ": " + err);
+      marcarObraPendiente_(obraId); // reintenta en la siguiente pasada del disparador
+    }
+  });
+}
+
 // ---------- Crear una obra nueva a partir de un presupuesto ----------
 
 function crearObra_(body) {
@@ -378,20 +435,24 @@ function borrarObra_(body) {
 
 // ---------- Leer una obra (config + presupuesto con totales + medidas) ----------
 
-// _debugTiming: instrumentacion temporal para encontrar el cuello de
-// botella real de la lentitud (la primera reescritura de
-// regenerarMemoriaCalculo_ no cambio el tiempo medido, asi que hay que
-// medir en vez de seguir adivinando). Se puede quitar una vez se identifique
-// y resuelva la causa; no afecta al frontend, que ignora ese campo.
+// Nota sobre rendimiento: esta funcion YA NO reconstruye "Memoria de
+// Cálculo" / "Registro Fotográfico" / "Ejecución Real" cada vez que se abre
+// la obra (antes lo hacia, y era la causa de que guardar una medida se
+// sintiera lento: guardar + recargar terminaba reconstruyendo esas 3 hojas
+// completas dos veces). Esos calculos (cantidadEjecutada, totales) se hacen
+// aqui mismo en memoria a partir de la hoja "Memoria" (la fuente real de
+// datos), asi que la app nunca dependio de que esas hojas estuvieran
+// reconstruidas para mostrar informacion correcta -- son solo para cuando
+// alguien abre el Google Sheet directamente (para imprimir/compartir el
+// informe). Por eso, en vez de reconstruirlas aqui (bloqueando al usuario),
+// se marca la obra como "pendiente" y un disparador por tiempo
+// (actualizarReportesPendientes_, ver mas abajo) las pone al dia solas en
+// segundo plano cada pocos minutos.
 function leerObra_(obraId) {
-  var _t = { inicio: Date.now() };
-
   var obra = buscarObra_(obraId);
   if (!obra) throw new Error("Obra no encontrada");
-  _t.buscarObra = Date.now();
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
-  _t.abrirSpreadsheet = Date.now();
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
@@ -400,7 +461,6 @@ function leerObra_(obraId) {
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
   var filasMemoria = ultimaFilaMemoria > 1 ? hojaMemoria.getRange(2, 1, ultimaFilaMemoria - 1, 14).getValues() : [];
-  _t.leerHojas = Date.now();
 
   var totales = {};
   var medidas = filasMemoria.map(function (r) {
@@ -415,14 +475,6 @@ function leerObra_(obraId) {
       cantidad: r[11], cantidadParcial: cantidadParcial, fotoUrl: r[12], fotosUrls: separarFotos_(r[12]), observacion: r[13],
     };
   });
-  _t.procesarMedidas = Date.now();
-
-  // Reconstruye "Memoria de Cálculo" y "Registro Fotográfico" cada vez que se
-  // abre la obra, sin importar si "Memoria" cambio por la app o porque el
-  // usuario edito/borro filas a mano directamente en la hoja: asi las dos
-  // hojas calculadas nunca quedan desincronizadas de la fuente real de datos.
-  var timingRegenerar = regenerarMemoriaCalculo_(ss);
-  _t.regenerarMemoriaCalculo = Date.now();
 
   var direccionesMap = {};
   var ordenDirecciones = [];
@@ -442,20 +494,14 @@ function leerObra_(obraId) {
   var direcciones = ordenDirecciones.map(function (nombre) {
     return { nombre: nombre, items: direccionesMap[nombre] };
   });
-  _t.armarDirecciones = Date.now();
 
-  var debugTiming = {
-    buscarObraMs: _t.buscarObra - _t.inicio,
-    abrirSpreadsheetMs: _t.abrirSpreadsheet - _t.buscarObra,
-    leerHojasMs: _t.leerHojas - _t.abrirSpreadsheet,
-    procesarMedidasMs: _t.procesarMedidas - _t.leerHojas,
-    regenerarMemoriaCalculoMs: _t.regenerarMemoriaCalculo - _t.procesarMedidas,
-    armarDireccionesMs: _t.armarDirecciones - _t.regenerarMemoriaCalculo,
-    totalMs: _t.armarDirecciones - _t.inicio,
-    detalleRegenerar: timingRegenerar,
-  };
+  // Si esta obra tenia cambios pendientes por reflejar en las hojas de
+  // reporte (alguien guardo/edito/borro una medida desde la ultima pasada
+  // del disparador de tiempo), no hace falta hacer nada especial aqui: el
+  // marcado ya quedo hecho en el momento del guardado (ver
+  // marcarObraPendiente_), y el disparador se encarga solo.
 
-  return { obra: obra, direcciones: direcciones, medidas: medidas, _debugTiming: debugTiming };
+  return { obra: obra, direcciones: direcciones, medidas: medidas };
 }
 
 // ---------- Medidas (memoria de calculo) ----------
@@ -479,15 +525,12 @@ function guardarMedida_(body) {
     Number(body.cantidad) || 0, subida.urls.join("|"), body.observacion || "",
   ];
   hoja.appendRow(fila);
-  // NO se llama regenerarMemoriaCalculo_ aqui: el frontend SIEMPRE recarga
-  // la obra completa (GET /api/obras/:obraId) justo despues de guardar una
-  // medida, y esa recarga (leerObra_) ya reconstruye "Memoria de Calculo" /
-  // "Registro Fotografico" / "Ejecucion Real" desde cero. Hacerlo tambien
-  // aqui era reconstruir las 3 hojas DOS VECES por cada guardado -- la
-  // causa principal de que el guardado siguiera sintiendose lento incluso
-  // despues de comprimir las fotos. Si en el futuro se llama esta funcion
-  // desde algun lugar que no recargue la obra despues, hay que volver a
-  // agregar la llamada ahi.
+  // No se reconstruyen aqui "Memoria de Calculo" / "Registro Fotografico" /
+  // "Ejecucion Real" (eso es lo que hacia sentir lento el guardado). En vez
+  // de eso, se marca la obra como pendiente: un disparador por tiempo
+  // (actualizarReportesPendientes_) las pone al dia solo en segundo plano
+  // cada pocos minutos, sin que el usuario tenga que esperar.
+  marcarObraPendiente_(body.obraId);
 
   return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: subida.urls, fotosFallidas: subida.fallos };
 }
@@ -525,8 +568,7 @@ function copiarMedidas_(body) {
     ];
   });
   hoja.getRange(hoja.getLastRow() + 1, 1, filas.length, 14).setValues(filas);
-  // Ver nota en guardarMedida_: el frontend recarga la obra justo despues,
-  // asi que reconstruir aqui tambien seria trabajo duplicado.
+  marcarObraPendiente_(body.obraId); // ver nota en guardarMedida_
 
   return { ok: true, ids: idsCreadas, cantidad: idsCreadas.length };
 }
@@ -560,7 +602,7 @@ function editarMedida_(body) {
         hoja.getRange(fila, 13).setValue(fotosActuales.concat(subida.urls).join("|"));
       }
       hoja.getRange(fila, 14).setValue(body.observacion || "");
-      // Ver nota en guardarMedida_: el frontend recarga la obra justo despues.
+      marcarObraPendiente_(body.obraId); // ver nota en guardarMedida_
       return { ok: true, fotosFallidas: subida.fallos };
     }
   }
@@ -580,7 +622,7 @@ function borrarMedida_(body) {
   for (var i = 0; i < ids.length; i++) {
     if (ids[i][0] === body.medidaId) {
       hoja.deleteRow(i + 2);
-      // Ver nota en guardarMedida_: el frontend recarga la obra justo despues.
+      marcarObraPendiente_(body.obraId); // ver nota en guardarMedida_
       return { ok: true };
     }
   }
@@ -653,9 +695,7 @@ function editarItemPresupuesto_(body) {
     }
   }
 
-  // Ver nota en guardarMedida_: el frontend recarga la obra justo despues
-  // de editar un item (recargarDireccionYItem), asi que no hace falta
-  // reconstruir aqui tambien.
+  marcarObraPendiente_(body.obraId); // ver nota en guardarMedida_
 
   var resultado = { ok: true, masterActualizado: false, avisoMaster: "" };
   if (obra.fileIdPresupuesto && filaOrigen) {
