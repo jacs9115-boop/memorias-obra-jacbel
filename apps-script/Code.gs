@@ -1026,54 +1026,104 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
   if (hojaVieja) ss.deleteSheet(hojaVieja);
   var hoja = ss.insertSheet(NOMBRE_HOJA);
 
-  var fila = 1;
-  hoja.getRange(fila, 1, 1, COLS).merge().setValue("REGISTRO FOTOGRÁFICO")
-    .setFontWeight("bold").setFontSize(14).setHorizontalAlignment("center")
-    .setBackground("#1F4E78").setFontColor("#FFFFFF");
-  fila += 2;
+  // Mismo patron que regenerarMemoriaCalculo_/regenerarEjecucionReal_: se
+  // arma todo en memoria (valores, formatos, filas a fusionar) y se aplica
+  // con llamadas en bloque en vez de una por celda/fila. Las formulas
+  // IMAGE()/HYPERLINK() de las fotos se aplican aparte al final (son pocas,
+  // una por foto, y solo existen en la columna 1 de esas filas puntuales).
+  var valores = [];
+  var backgrounds = [];
+  var negritas = [];
+  var coloresTexto = [];
+  var alineaciones = [];
+  var tamanosFuente = [];
+  var wraps = [];
+  var merges = [];
+  var filasAltura = [];
+  var formulasImagen = []; // { fila, formula }
+
+  function filaVacia() { return new Array(COLS).fill(""); }
+  function agregarFila(vals, opts) {
+    opts = opts || {};
+    valores.push(vals);
+    backgrounds.push(new Array(COLS).fill(opts.bg || "#ffffff"));
+    negritas.push(new Array(COLS).fill(opts.bold ? "bold" : "normal"));
+    coloresTexto.push(new Array(COLS).fill(opts.color || "#000000"));
+    alineaciones.push(new Array(COLS).fill(opts.align || "left"));
+    tamanosFuente.push(new Array(COLS).fill(opts.size || 11));
+    wraps.push(new Array(COLS).fill(!!opts.wrap));
+    return valores.length;
+  }
+
+  var valsTitulo = filaVacia(); valsTitulo[0] = "REGISTRO FOTOGRÁFICO";
+  var filaTitulo = agregarFila(valsTitulo, { bg: "#1F4E78", color: "#FFFFFF", bold: true, align: "center", size: 14 });
+  merges.push({ fila: filaTitulo, columnas: COLS });
+  agregarFila(filaVacia()); // fila en blanco despues del titulo
 
   [
     ["Obra", meta.nombreObra], ["Contrato", meta.numeroContrato], ["Objeto", meta.objeto],
     ["Contratista", meta.contratista], ["Supervisor", meta.supervisor],
   ].forEach(function (d) {
-    hoja.getRange(fila, 1).setValue(d[0]).setFontWeight("bold");
-    hoja.getRange(fila, 2, 1, COLS - 1).merge().setValue(d[1] || "").setWrap(true);
-    fila++;
+    var vals = filaVacia(); vals[0] = d[0]; vals[1] = d[1] || "";
+    var f = agregarFila(vals, { bold: false, wrap: true });
+    // La etiqueta ("Obra", "Contrato"...) si va en negrita, el valor no; se
+    // corrige encima del array recien agregado en vez de complicar agregarFila.
+    negritas[f - 1][0] = "bold";
+    merges.push({ fila: f, columnas: COLS, desde: 2 });
   });
-  fila += 1;
+  agregarFila(filaVacia()); // fila en blanco antes de las fotos
 
   if (!fotos.length) {
-    hoja.getRange(fila, 1, 1, COLS).merge().setValue("Todavía no hay fotos registradas.")
-      .setHorizontalAlignment("center").setFontColor("#6B7686");
+    var valsVacio = filaVacia(); valsVacio[0] = "Todavía no hay fotos registradas.";
+    var filaVacioIdx = agregarFila(valsVacio, { align: "center", color: "#6B7686" });
+    merges.push({ fila: filaVacioIdx, columnas: COLS });
   } else {
     var direccionActual = null;
     fotos.forEach(function (f) {
       if (f.direccion !== direccionActual) {
         direccionActual = f.direccion;
-        hoja.getRange(fila, 1, 1, COLS).merge().setValue(direccionActual)
-          .setFontWeight("bold").setBackground("#1F4E78").setFontColor("#FFFFFF")
-          .setHorizontalAlignment("center");
-        fila++;
+        var valsDir = filaVacia(); valsDir[0] = direccionActual;
+        var filaDir = agregarFila(valsDir, { bg: "#1F4E78", color: "#FFFFFF", bold: true, align: "center" });
+        merges.push({ fila: filaDir, columnas: COLS });
       }
 
       var etiqueta = "Imagen " + f.numero + "  —  " + f.item + " — " + f.descripcion +
         (f.observacion ? " (" + f.observacion + ")" : "");
-      hoja.getRange(fila, 1, 1, COLS).merge().setValue(etiqueta)
-        .setFontWeight("bold").setHorizontalAlignment("center").setWrap(true);
-      fila++;
+      var valsEtiqueta = filaVacia(); valsEtiqueta[0] = etiqueta;
+      var filaEtiqueta = agregarFila(valsEtiqueta, { bold: true, align: "center", wrap: true });
+      merges.push({ fila: filaEtiqueta, columnas: COLS });
 
-      f.filaRegistro = fila;
+      f.filaRegistro = filaEtiqueta + 1;
+      var filaImagen = agregarFila(filaVacia(), { align: "center" });
+      merges.push({ fila: filaImagen, columnas: COLS });
+      filasAltura.push({ fila: filaImagen, altura: 260 });
+
       var miniaturaUrl = miniaturaFoto_(f.fotoUrl);
-      hoja.getRange(fila, 1, 1, COLS).merge().setHorizontalAlignment("center").setVerticalAlignment("middle");
       if (miniaturaUrl) {
-        hoja.getRange(fila, 1).setFormula('=IMAGE("' + miniaturaUrl + '";1)');
+        formulasImagen.push({ fila: filaImagen, formula: '=IMAGE("' + miniaturaUrl + '";1)' });
       } else if (f.fotoUrl) {
-        hoja.getRange(fila, 1).setFormula('=HYPERLINK("' + f.fotoUrl + '";"Ver foto")');
+        formulasImagen.push({ fila: filaImagen, formula: '=HYPERLINK("' + f.fotoUrl + '";"Ver foto")' });
       }
-      hoja.setRowHeight(fila, 260);
-      fila += 2;
+
+      agregarFila(filaVacia()); // fila en blanco entre fotos
     });
   }
+
+  var totalFilas = valores.length;
+  hoja.getRange(1, 1, totalFilas, COLS).setValues(valores);
+  hoja.getRange(1, 1, totalFilas, COLS).setBackgrounds(backgrounds);
+  hoja.getRange(1, 1, totalFilas, COLS).setFontWeights(negritas);
+  hoja.getRange(1, 1, totalFilas, COLS).setFontColors(coloresTexto);
+  hoja.getRange(1, 1, totalFilas, COLS).setHorizontalAlignments(alineaciones);
+  hoja.getRange(1, 1, totalFilas, COLS).setFontSizes(tamanosFuente);
+  hoja.getRange(1, 1, totalFilas, COLS).setWraps(wraps);
+
+  merges.forEach(function (mrg) {
+    var desde = mrg.desde || 1;
+    hoja.getRange(mrg.fila, desde, 1, COLS - desde + 1).merge();
+  });
+  filasAltura.forEach(function (fa) { hoja.setRowHeight(fa.fila, fa.altura); });
+  formulasImagen.forEach(function (fi) { hoja.getRange(fi.fila, 1).setFormula(fi.formula); });
 
   for (var c = 1; c <= COLS; c++) hoja.setColumnWidth(c, 160);
 
@@ -1254,17 +1304,53 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   var DATA_START = 3;
   var numFilas = filas.length;
   if (numFilas === 0) return;
-  sh.getRange(DATA_START, 1, numFilas, 14).setValues(filas.map(function () { return ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]; }));
+
+  // Igual que en regenerarMemoriaCalculo_: antes esto eran hasta 5 vueltas
+  // sobre cada fila con varias llamadas individuales a la API de Sheets por
+  // vuelta (facil superar los mil llamados con un presupuesto oficial de
+  // tamaño normal -- medido: casi 11 segundos). Ahora se arma todo en
+  // memoria y se aplica con un puñado de llamadas en bloque.
+  //
+  // Las columnas "dinamicas" (PCANT/PVR/TCANT/TVR/SCANT/SVR) mezclan, segun
+  // la fila, un valor plano (la cantidad ejecutada de un item real) o una
+  // formula (sumas de acumulados/saldos) -- por eso van todas por
+  // setFormulas: ahi un string que no empieza con "=" se guarda igual que
+  // si se hubiera tecleado directo en la celda (Sheets lo sigue detectando
+  // como numero), asi no hace falta separar "poner valor" de "poner
+  // formula" celda por celda.
+  var COLS_DINAMICAS = [COL.PCANT, COL.PVR, COL.TCANT, COL.TVR, COL.SCANT, COL.SVR];
+
+  var valoresBase = [];
+  var dinamico = [];
+  var backgrounds = [];
+  var negritas = [];
+  var coloresTexto = [];
+  var estilosFuente = [];
 
   for (var idx = 0; idx < numFilas; idx++) {
     var f = filas[idx];
-    var row = DATA_START + idx;
-    sh.getRange(row, COL.ITEM).setValue(f.item);
-    sh.getRange(row, COL.DESC).setValue(f.descripcion);
-    sh.getRange(row, COL.UND).setValue(f.und);
-    if (f.cant !== "" && !isNaN(f.cant)) sh.getRange(row, COL.CCANT).setValue(f.cant);
-    if (f.vrUnit !== "" && !isNaN(f.vrUnit)) sh.getRange(row, COL.CVU).setValue(f.vrUnit);
-    if (f.vrParcial !== "" && !isNaN(f.vrParcial)) sh.getRange(row, COL.CVP).setValue(f.vrParcial);
+    var filaVals = ["", "", "", "", "", "", "", "", "", "", "", "", "", ""];
+    filaVals[COL.ITEM - 1] = f.item;
+    filaVals[COL.DESC - 1] = f.descripcion;
+    filaVals[COL.UND - 1] = f.und;
+    if (f.cant !== "" && !isNaN(f.cant)) filaVals[COL.CCANT - 1] = f.cant;
+    if (f.vrUnit !== "" && !isNaN(f.vrUnit)) filaVals[COL.CVU - 1] = f.vrUnit;
+    if (f.vrParcial !== "" && !isNaN(f.vrParcial)) filaVals[COL.CVP - 1] = f.vrParcial;
+    valoresBase.push(filaVals);
+
+    var filaDin = {};
+    COLS_DINAMICAS.forEach(function (c) { filaDin[c] = ""; });
+    dinamico.push(filaDin);
+
+    var bg = "#ffffff", peso = "normal", color = "#000000", estilo = "normal";
+    if (f.nivel === 0) { bg = "#1F4E78"; color = "#FFFFFF"; peso = "bold"; }
+    else if (f.nivel === 1) { bg = "#D9E1F2"; peso = "bold"; }
+    else if (f.nivel === 2) { bg = "#FCE4D6"; estilo = "italic"; }
+    else if (f.nivel === 4) { bg = "#F2F2F2"; estilo = "italic"; }
+    backgrounds.push(new Array(14).fill(bg));
+    negritas.push(new Array(14).fill(peso));
+    coloresTexto.push(new Array(14).fill(color));
+    estilosFuente.push(new Array(14).fill(estilo));
   }
 
   for (var idx = 0; idx < numFilas; idx++) {
@@ -1273,24 +1359,24 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     if (f.nivel === 3) {
       var clave = f.direccion + "||" + f.item;
       var cantEjecutada = totalPorItemClave[clave] || 0;
-      sh.getRange(row, COL.PCANT).setValue(cantEjecutada);
-      sh.getRange(row, COL.PVR).setFormula("=" + colLetraEjecucionReal_(COL.PCANT) + row + "*" + colLetraEjecucionReal_(COL.CVU) + row);
-      sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
-      sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
-      sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
-      sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+      dinamico[idx][COL.PCANT] = String(cantEjecutada);
+      dinamico[idx][COL.PVR] = "=" + colLetraEjecucionReal_(COL.PCANT) + row + "*" + colLetraEjecucionReal_(COL.CVU) + row;
+      dinamico[idx][COL.TCANT] = "=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row;
+      dinamico[idx][COL.TVR] = "=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row;
+      dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
+      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
     } else if (f.nivel === 1) {
       var finRel = numFilas;
       for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel <= 1) { finRel = j; break; } }
       var filaIni = DATA_START + idx + 1;
       var filaFin = DATA_START + finRel - 1;
       if (filaFin >= filaIni) {
-        sh.getRange(row, COL.PCANT).setFormula("=SUM(" + colLetraEjecucionReal_(COL.PCANT) + filaIni + ":" + colLetraEjecucionReal_(COL.PCANT) + filaFin + ")");
-        sh.getRange(row, COL.PVR).setFormula("=SUM(" + colLetraEjecucionReal_(COL.PVR) + filaIni + ":" + colLetraEjecucionReal_(COL.PVR) + filaFin + ")");
-        sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
-        sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
-        sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
-        sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+        dinamico[idx][COL.PCANT] = "=SUM(" + colLetraEjecucionReal_(COL.PCANT) + filaIni + ":" + colLetraEjecucionReal_(COL.PCANT) + filaFin + ")";
+        dinamico[idx][COL.PVR] = "=SUM(" + colLetraEjecucionReal_(COL.PVR) + filaIni + ":" + colLetraEjecucionReal_(COL.PVR) + filaFin + ")";
+        dinamico[idx][COL.TCANT] = "=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row;
+        dinamico[idx][COL.TVR] = "=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row;
+        dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
+        dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
       }
     } else if (f.nivel === 0) {
       var finRel0 = numFilas;
@@ -1298,25 +1384,24 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       var capRows = [];
       for (var j = idx + 1; j < finRel0; j++) { if (filas[j].nivel === 1) capRows.push(DATA_START + j); }
       if (capRows.length > 0) {
-        sh.getRange(row, COL.PCANT).setFormula("=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PCANT) + r; }).join(",") + ")");
-        sh.getRange(row, COL.PVR).setFormula("=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PVR) + r; }).join(",") + ")");
-        sh.getRange(row, COL.TCANT).setFormula("=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row);
-        sh.getRange(row, COL.TVR).setFormula("=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row);
-        sh.getRange(row, COL.SCANT).setFormula("=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row);
-        sh.getRange(row, COL.SVR).setFormula("=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row);
+        dinamico[idx][COL.PCANT] = "=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PCANT) + r; }).join(",") + ")";
+        dinamico[idx][COL.PVR] = "=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PVR) + r; }).join(",") + ")";
+        dinamico[idx][COL.TCANT] = "=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row;
+        dinamico[idx][COL.TVR] = "=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row;
+        dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
+        dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
       }
     }
   }
 
-  for (var idx = 0; idx < numFilas; idx++) {
-    var f = filas[idx];
-    var row = DATA_START + idx;
-    var r = sh.getRange(row, 1, 1, 14);
-    if (f.nivel === 0) { r.setBackground("#1F4E78").setFontColor("#FFFFFF").setFontWeight("bold"); }
-    else if (f.nivel === 1) { r.setBackground("#D9E1F2").setFontWeight("bold"); }
-    else if (f.nivel === 2) { r.setBackground("#FCE4D6").setFontStyle("italic"); }
-    else if (f.nivel === 4) { r.setBackground("#F2F2F2").setFontStyle("italic"); }
-  }
+  sh.getRange(DATA_START, 1, numFilas, 14).setValues(valoresBase);
+  sh.getRange(DATA_START, 1, numFilas, 14).setBackgrounds(backgrounds);
+  sh.getRange(DATA_START, 1, numFilas, 14).setFontWeights(negritas);
+  sh.getRange(DATA_START, 1, numFilas, 14).setFontColors(coloresTexto);
+  sh.getRange(DATA_START, 1, numFilas, 14).setFontStyles(estilosFuente);
+  sh.getRange(DATA_START, COLS_DINAMICAS[0], numFilas, COLS_DINAMICAS.length).setFormulas(
+    dinamico.map(function (fila) { return COLS_DINAMICAS.map(function (c) { return fila[c]; }); })
+  );
 
   [COL.CVU, COL.CVP, COL.AVR, COL.PVR, COL.TVR, COL.SVR].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("$#,##0"); });
   [COL.CCANT, COL.ACANT, COL.PCANT, COL.TCANT, COL.SCANT].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("#,##0.00"); });
