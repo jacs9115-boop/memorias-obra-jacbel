@@ -682,16 +682,33 @@ function agregarItemPresupuesto_(body) {
   var hojaPres = ss.getSheetByName("Presupuesto");
   var lastRow = hojaPres.getLastRow();
 
+  // Se busca la ULTIMA fila que ya pertenece a esta direccion, para insertar
+  // el item nuevo justo despues (dentro de su propio bloque), en vez de
+  // pegarlo al final de toda la hoja -- si no, Memoria de Calculo terminaria
+  // mostrando el nombre de la direccion duplicado (su bloque original mas
+  // arriba, y otro aparte solo con el item nuevo al fondo de la hoja).
+  var filaInsercion = -1; // 1-based; -1 = no se encontro esa direccion
   if (lastRow > 1) {
     var valores = hojaPres.getRange(2, 1, lastRow - 1, 3).getValues();
     for (var i = 0; i < valores.length; i++) {
-      if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === itemNuevo) {
-        return { ok: false, error: "Ya existe un item \"" + itemNuevo + "\" en esa dirección. Usa el lápiz ✏️ para editarlo en vez de crear uno nuevo." };
+      if (normalizarTexto_(valores[i][0]) === direccion) {
+        if (normalizarTexto_(valores[i][2]) === itemNuevo) {
+          return { ok: false, error: "Ya existe un item \"" + itemNuevo + "\" en esa dirección. Usa el lápiz ✏️ para editarlo en vez de crear uno nuevo." };
+        }
+        filaInsercion = i + 2; // ultima fila vista de esta direccion (se sigue actualizando al recorrer)
       }
     }
   }
 
-  hojaPres.appendRow([direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, ""]);
+  var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, ""];
+  if (filaInsercion === -1) {
+    // No habia ningun item de esta direccion todavia (caso raro): se agrega
+    // al final de toda la hoja, igual que antes.
+    hojaPres.appendRow(filaNueva);
+  } else {
+    hojaPres.insertRowAfter(filaInsercion);
+    hojaPres.getRange(filaInsercion + 1, 1, 1, 7).setValues([filaNueva]);
+  }
   marcarObraPendiente_(body.obraId);
 
   return { ok: true };
