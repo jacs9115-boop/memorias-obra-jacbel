@@ -168,6 +168,21 @@
 
   <div class="vista" id="vistaDireccion" style="display:none">
     <div id="listaItems"></div>
+    <div class="card">
+      <button type="button" class="btn-secondary" id="btnMostrarAgregarItem" style="margin-top:0">+ Agregar item nuevo</button>
+      <div id="formAgregarItem" style="display:none;margin-top:12px">
+        <div class="empty" style="padding:0 0 10px;font-size:12.5px;text-align:left">
+          Para un item que no estaba en el presupuesto original (ej. una adición al contrato). Esto no modifica el archivo de Excel original, solo se agrega a esta obra.
+        </div>
+        <div class="field"><label>Número de item</label><input type="text" id="campoNuevoItemNumero" /></div>
+        <div class="field"><label>Descripción</label><input type="text" id="campoNuevoItemDescripcion" /></div>
+        <div class="field"><label>Unidad (ej: M3, M2, ML, UND, DÍAS)</label><input type="text" id="campoNuevoItemUnidad" /></div>
+        <div class="field"><label>Cantidad presupuestada</label><input type="number" step="any" id="campoNuevoItemCantidad" /></div>
+        <div class="field"><label>Capítulo (opcional, para agruparlo)</label><input type="text" id="campoNuevoItemCapitulo" placeholder="Ej: Adición 1" /></div>
+        <button type="button" class="btn-primary" id="btnGuardarNuevoItem">Guardar item nuevo</button>
+        <button type="button" class="btn-secondary" id="btnCancelarNuevoItem">Cancelar</button>
+      </div>
+    </div>
   </div>
 
   <div class="vista" id="vistaItem" style="display:none">
@@ -518,6 +533,63 @@ function renderDireccion() {
     el.addEventListener("click", () => abrirItem(direccionActual.items[Number(el.dataset.idx)]));
   });
 }
+
+// ---------- Agregar item nuevo al presupuesto de la obra ----------
+document.getElementById("btnMostrarAgregarItem").addEventListener("click", () => {
+  const form = document.getElementById("formAgregarItem");
+  if (form.style.display !== "none") {
+    form.style.display = "none";
+    return;
+  }
+  ["campoNuevoItemNumero", "campoNuevoItemDescripcion", "campoNuevoItemUnidad", "campoNuevoItemCantidad", "campoNuevoItemCapitulo"]
+    .forEach((id) => { document.getElementById(id).value = ""; });
+  form.style.display = "block";
+});
+
+document.getElementById("btnCancelarNuevoItem").addEventListener("click", () => {
+  document.getElementById("formAgregarItem").style.display = "none";
+});
+
+async function recargarObraYDireccion() {
+  const res = await fetch(`${API_BASE}/api/obras/${encodeURIComponent(obraActual.obra.obraId)}`);
+  const data = await res.json();
+  obraActual = data;
+  const dir = obraActual.direcciones.find((d) => d.nombre === direccionActual.nombre);
+  if (dir) direccionActual = dir;
+}
+
+document.getElementById("btnGuardarNuevoItem").addEventListener("click", async () => {
+  const numero = document.getElementById("campoNuevoItemNumero").value.trim();
+  const descripcion = document.getElementById("campoNuevoItemDescripcion").value.trim();
+  const unidad = document.getElementById("campoNuevoItemUnidad").value.trim();
+  const cantidadPresupuestada = document.getElementById("campoNuevoItemCantidad").value.trim();
+  const capitulo = document.getElementById("campoNuevoItemCapitulo").value.trim();
+  if (!numero) { mostrarToast("Ponle un número al item", true); return; }
+
+  const btn = document.getElementById("btnGuardarNuevoItem");
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Guardando...";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/items`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        direccion: direccionActual.nombre, item: numero, descripcion, unidad, cantidadPresupuestada, capitulo,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al agregar el item");
+    await recargarObraYDireccion();
+    document.getElementById("formAgregarItem").style.display = "none";
+    renderDireccion();
+    mostrarToast("Item agregado ✓");
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+});
 
 // ---------- Vista: item (formulario + historial) ----------
 function tipoUnidad(unidadRaw) {

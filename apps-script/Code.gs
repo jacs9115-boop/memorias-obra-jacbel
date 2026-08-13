@@ -24,6 +24,7 @@ function doPost(e) {
     if (body.accion === "borrar_medida") return jsonOutput_(borrarMedida_(body));
     if (body.accion === "borrar_obra") return jsonOutput_(borrarObra_(body));
     if (body.accion === "editar_item") return jsonOutput_(editarItemPresupuesto_(body));
+    if (body.accion === "agregar_item") return jsonOutput_(agregarItemPresupuesto_(body));
     if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
@@ -652,6 +653,48 @@ function borrarMedida_(body) {
     }
   }
   return { ok: false, error: "Medida no encontrada" };
+}
+
+// ---------- Agregar un item nuevo al presupuesto de una obra ----------
+//
+// Para cuando el presupuesto original de Drive se queda corto (un item que
+// nunca estuvo ahi, o que se agrego despues en una adicion al contrato).
+// Esto NO toca el archivo original en Drive -- a diferencia de editar_item,
+// no hay "fila origen" que actualizar porque el item nunca vino de ahi. Solo
+// queda agregado en la copia de Presupuesto de esta obra (FilaOrigen vacia),
+// asi que si mas adelante se corrige desde el lapiz ✏️, el aviso va a decir
+// que no se pudo actualizar el archivo original -- es lo esperado.
+function agregarItemPresupuesto_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+
+  var direccion = normalizarTexto_(body.direccion);
+  var itemNuevo = normalizarTexto_(body.item);
+  if (!direccion || !itemNuevo) return { ok: false, error: "Falta dirección o número de item" };
+
+  var descripcion = normalizarTexto_(body.descripcion);
+  var unidad = normalizarTexto_(body.unidad);
+  var capitulo = normalizarTexto_(body.capitulo) || "Agregado manualmente";
+  var cantidadPresupuestada = (body.cantidadPresupuestada !== "" && body.cantidadPresupuestada != null)
+    ? (Number(body.cantidadPresupuestada) || 0) : 0;
+
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hojaPres = ss.getSheetByName("Presupuesto");
+  var lastRow = hojaPres.getLastRow();
+
+  if (lastRow > 1) {
+    var valores = hojaPres.getRange(2, 1, lastRow - 1, 3).getValues();
+    for (var i = 0; i < valores.length; i++) {
+      if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === itemNuevo) {
+        return { ok: false, error: "Ya existe un item \"" + itemNuevo + "\" en esa dirección. Usa el lápiz ✏️ para editarlo en vez de crear uno nuevo." };
+      }
+    }
+  }
+
+  hojaPres.appendRow([direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, ""]);
+  marcarObraPendiente_(body.obraId);
+
+  return { ok: true };
 }
 
 // ---------- Editar un item del presupuesto (unidad/descripcion/numero) ----------
