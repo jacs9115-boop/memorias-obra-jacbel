@@ -455,7 +455,15 @@ function guardarMedida_(body) {
     Number(body.cantidad) || 0, subida.urls.join("|"), body.observacion || "",
   ];
   hoja.appendRow(fila);
-  regenerarMemoriaCalculo_(ss);
+  // NO se llama regenerarMemoriaCalculo_ aqui: el frontend SIEMPRE recarga
+  // la obra completa (GET /api/obras/:obraId) justo despues de guardar una
+  // medida, y esa recarga (leerObra_) ya reconstruye "Memoria de Calculo" /
+  // "Registro Fotografico" / "Ejecucion Real" desde cero. Hacerlo tambien
+  // aqui era reconstruir las 3 hojas DOS VECES por cada guardado -- la
+  // causa principal de que el guardado siguiera sintiendose lento incluso
+  // despues de comprimir las fotos. Si en el futuro se llama esta funcion
+  // desde algun lugar que no recargue la obra despues, hay que volver a
+  // agregar la llamada ahi.
 
   return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: subida.urls, fotosFallidas: subida.fallos };
 }
@@ -493,7 +501,8 @@ function copiarMedidas_(body) {
     ];
   });
   hoja.getRange(hoja.getLastRow() + 1, 1, filas.length, 14).setValues(filas);
-  regenerarMemoriaCalculo_(ss);
+  // Ver nota en guardarMedida_: el frontend recarga la obra justo despues,
+  // asi que reconstruir aqui tambien seria trabajo duplicado.
 
   return { ok: true, ids: idsCreadas, cantidad: idsCreadas.length };
 }
@@ -527,7 +536,7 @@ function editarMedida_(body) {
         hoja.getRange(fila, 13).setValue(fotosActuales.concat(subida.urls).join("|"));
       }
       hoja.getRange(fila, 14).setValue(body.observacion || "");
-      regenerarMemoriaCalculo_(ss);
+      // Ver nota en guardarMedida_: el frontend recarga la obra justo despues.
       return { ok: true, fotosFallidas: subida.fallos };
     }
   }
@@ -547,7 +556,7 @@ function borrarMedida_(body) {
   for (var i = 0; i < ids.length; i++) {
     if (ids[i][0] === body.medidaId) {
       hoja.deleteRow(i + 2);
-      regenerarMemoriaCalculo_(ss);
+      // Ver nota en guardarMedida_: el frontend recarga la obra justo despues.
       return { ok: true };
     }
   }
@@ -620,7 +629,9 @@ function editarItemPresupuesto_(body) {
     }
   }
 
-  regenerarMemoriaCalculo_(ss);
+  // Ver nota en guardarMedida_: el frontend recarga la obra justo despues
+  // de editar un item (recargarDireccionYItem), asi que no hace falta
+  // reconstruir aqui tambien.
 
   var resultado = { ok: true, masterActualizado: false, avisoMaster: "" };
   if (obra.fileIdPresupuesto && filaOrigen) {
