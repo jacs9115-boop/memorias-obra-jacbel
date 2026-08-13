@@ -706,6 +706,7 @@ function actualizarFilaPresupuestoOriginal_(fileId, filaOrigen, cambios) {
 // foto en grande.
 function regenerarMemoriaCalculo_(ss) {
   var NOMBRE_HOJA = "Memoria de Cálculo";
+  var COLS = 9;
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
@@ -740,11 +741,45 @@ function regenerarMemoriaCalculo_(ss) {
   if (hojaVieja) ss.deleteSheet(hojaVieja);
   var hoja = ss.insertSheet(NOMBRE_HOJA);
 
-  var fila = 1;
-  var direccionActual = null;
-  var capituloActual = null;
+  // Antes, cada fila (cada medida, cada encabezado de item/capitulo/
+  // direccion) se escribia con varias llamadas individuales a la API de
+  // Sheets (setValue + merge + setFontWeight + setBackground...). Con
+  // decenas de mediciones eso son cientos de llamadas, y cada una tiene su
+  // propio costo de red/ejecucion -- medido: mas de 20 segundos para
+  // reconstruir esta hoja con solo 81 mediciones. Ahora se arma todo en
+  // memoria (valores, formulas, colores, negritas) fila por fila igual que
+  // antes, pero se aplica al final con un puñado de llamadas en bloque
+  // sobre el rango completo. Los merge() no se pueden agrupar en Sheets
+  // (cada uno es una operacion propia), pero son muchos menos que las
+  // celdas individuales que se estaban escribiendo antes.
+  var valores = [];
+  var formulasCol9 = [];
+  var backgrounds = [];
+  var negritas = [];
+  var coloresTexto = [];
+  var alineaciones = [];
+  var merges = [];
   var fotos = [];
   var pendientesFoto = [];
+
+  function filaVacia() { return new Array(COLS).fill(""); }
+
+  // Agrega una fila a los arrays en memoria y devuelve su numero de fila
+  // (1-based) dentro de la hoja, para poder referenciarla en formulas o
+  // fusiones despues.
+  function agregarFila(vals, opts) {
+    opts = opts || {};
+    valores.push(vals);
+    formulasCol9.push("");
+    backgrounds.push(new Array(COLS).fill(opts.bg || "#ffffff"));
+    negritas.push(new Array(COLS).fill(opts.bold ? "bold" : "normal"));
+    coloresTexto.push(new Array(COLS).fill(opts.color || "#000000"));
+    alineaciones.push(new Array(COLS).fill(opts.align || "left"));
+    return valores.length;
+  }
+
+  var direccionActual = null;
+  var capituloActual = null;
 
   filasPres.forEach(function (r) {
     var direccion = r[0], capitulo = r[1], item = r[2], descripcion = r[3], unidad = r[4];
@@ -755,32 +790,34 @@ function regenerarMemoriaCalculo_(ss) {
     if (direccion !== direccionActual) {
       direccionActual = direccion;
       capituloActual = null;
-      hoja.getRange(fila, 1).setValue(direccion);
-      hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold").setBackground("#1F4E78").setFontColor("#FFFFFF");
-      fila++;
+      var valsDir = filaVacia(); valsDir[0] = direccion;
+      var filaDir = agregarFila(valsDir, { bg: "#1F4E78", bold: true, color: "#FFFFFF" });
+      merges.push({ fila: filaDir, columnas: COLS });
     }
     if (capitulo !== capituloActual) {
       capituloActual = capitulo;
-      hoja.getRange(fila, 1).setValue(capitulo);
-      hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold").setBackground("#DCE6F1");
-      fila++;
+      var valsCap = filaVacia(); valsCap[0] = capitulo;
+      var filaCap = agregarFila(valsCap, { bg: "#DCE6F1", bold: true });
+      merges.push({ fila: filaCap, columnas: COLS });
     }
 
-    hoja.getRange(fila, 1).setValue(item + " — " + descripcion + " (" + (unidad || "sin unidad") + ")");
-    hoja.getRange(fila, 1, 1, 9).merge().setFontWeight("bold");
-    fila++;
+    var valsItem = filaVacia();
+    valsItem[0] = item + " — " + descripcion + " (" + (unidad || "sin unidad") + ")";
+    var filaItem = agregarFila(valsItem, { bold: true });
+    merges.push({ fila: filaItem, columnas: COLS });
 
-    hoja.getRange(fila, 1, 1, 9).setValues([["Foto", "Descripción / Observación", "Longitud", "Ancho", "Alto", "Volumen", "Km", "Cantidad", "Cantidad Parcial"]]);
-    hoja.getRange(fila, 1, 1, 9).setFontWeight("bold").setBackground("#F0F0F0");
-    fila++;
+    agregarFila(
+      ["Foto", "Descripción / Observación", "Longitud", "Ancho", "Alto", "Volumen", "Km", "Cantidad", "Cantidad Parcial"],
+      { bg: "#F0F0F0", bold: true }
+    );
 
     var tipo = tipoUnidad_(unidad);
-    var filaInicioMedidas = fila;
+    var filaInicioMedidas = valores.length + 1;
     medidas.forEach(function (m) {
-      hoja.getRange(fila, 1, 1, 9).setValues([[
+      var filaMedida = agregarFila([
         "", m.observacion || "", m.longitud || "", m.ancho || "", m.alto || "", m.volumen || "", m.distanciaKm || "", m.cantidad || 0, "",
-      ]]);
-      hoja.getRange(fila, 9).setFormula(formulaCantidadParcial_(tipo, fila));
+      ]);
+      formulasCol9[filaMedida - 1] = formulaCantidadParcial_(tipo, filaMedida);
       var urlsMedida = separarFotos_(m.fotoUrl);
       if (urlsMedida.length) {
         var indiceInicio = fotos.length;
@@ -793,20 +830,34 @@ function regenerarMemoriaCalculo_(ss) {
             observacion: m.observacion || "", fotoUrl: url,
           });
         });
-        pendientesFoto.push({ fila: fila, indiceFoto: indiceInicio, numeros: numeros });
+        pendientesFoto.push({ fila: filaMedida, indiceFoto: indiceInicio, numeros: numeros });
       }
-      fila++;
     });
-    var filaFinMedidas = fila - 1;
+    var filaFinMedidas = valores.length;
 
     // El TOTAL solo suma la columna "Cantidad Parcial" (el resultado final).
     // La columna "Cantidad" es el multiplicador manual por fila (cuantos
     // elementos iguales), sumarla no tiene sentido.
-    hoja.getRange(fila, 1).setValue("TOTAL");
-    hoja.getRange(fila, 1, 1, 8).merge().setFontWeight("bold").setHorizontalAlignment("right");
-    hoja.getRange(fila, 9).setFormula("=SUM(I" + filaInicioMedidas + ":I" + filaFinMedidas + ")").setFontWeight("bold");
-    fila += 2;
+    var valsTotal = filaVacia(); valsTotal[0] = "TOTAL";
+    var filaTotal = agregarFila(valsTotal, { bold: true, align: "right" });
+    formulasCol9[filaTotal - 1] = "=SUM(I" + filaInicioMedidas + ":I" + filaFinMedidas + ")";
+    merges.push({ fila: filaTotal, columnas: 8 });
+
+    agregarFila(filaVacia()); // fila en blanco antes del siguiente item
   });
+
+  var totalFilas = valores.length;
+  if (totalFilas > 0) {
+    hoja.getRange(1, 1, totalFilas, COLS).setValues(valores);
+    hoja.getRange(1, 1, totalFilas, COLS).setBackgrounds(backgrounds);
+    hoja.getRange(1, 1, totalFilas, COLS).setFontWeights(negritas);
+    hoja.getRange(1, 1, totalFilas, COLS).setFontColors(coloresTexto);
+    hoja.getRange(1, 1, totalFilas, COLS).setHorizontalAlignments(alineaciones);
+    hoja.getRange(1, 9, totalFilas, 1).setFormulas(formulasCol9.map(function (f) { return [f]; }));
+    merges.forEach(function (mrg) {
+      hoja.getRange(mrg.fila, 1, 1, mrg.columnas).merge();
+    });
+  }
 
   hoja.setColumnWidth(1, 100);
   hoja.setColumnWidth(2, 220);
