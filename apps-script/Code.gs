@@ -1289,13 +1289,18 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   var COL = { ITEM: 1, DESC: 2, UND: 3, CCANT: 4, CVU: 5, CVP: 6, ACANT: 7, AVR: 8, PCANT: 9, PVR: 10, TCANT: 11, TVR: 12, SCANT: 13, SVR: 14 };
   var HEADER_BG = "#1F4E78";
 
-  sh.getRange(1, COL.ITEM, 2, 1).merge().setValue("ITEM");
-  sh.getRange(1, COL.DESC, 2, 1).merge().setValue("DESCRIPCIÓN");
-  sh.getRange(1, COL.UND, 1, 4).merge().setValue("CONTRATADO");
-  sh.getRange(1, COL.ACANT, 1, 2).merge().setValue("ACU ACTA ANTERIOR");
-  sh.getRange(1, COL.PCANT, 1, 2).merge().setValue("PRESENTE ACTA FINAL");
-  sh.getRange(1, COL.TCANT, 1, 2).merge().setValue("ACUMULADO TOTAL");
-  sh.getRange(1, COL.SCANT, 1, 2).merge().setValue("SALDO");
+  // Igual razon que el resto: ~20 llamadas sueltas (7 merge+setValue, 12
+  // setValue de subtitulos) para dos filas de encabezado tardaban casi 2
+  // segundos. Un solo setValues() con las dos filas armadas en memoria, y
+  // los merge() (esos si van uno por uno, Sheets no los agrupa) despues.
+  var filaEnc1 = new Array(14).fill("");
+  filaEnc1[COL.ITEM - 1] = "ITEM";
+  filaEnc1[COL.DESC - 1] = "DESCRIPCIÓN";
+  filaEnc1[COL.UND - 1] = "CONTRATADO";
+  filaEnc1[COL.ACANT - 1] = "ACU ACTA ANTERIOR";
+  filaEnc1[COL.PCANT - 1] = "PRESENTE ACTA FINAL";
+  filaEnc1[COL.TCANT - 1] = "ACUMULADO TOTAL";
+  filaEnc1[COL.SCANT - 1] = "SALDO";
 
   var sub2 = {};
   sub2[COL.UND] = "UNID"; sub2[COL.CCANT] = "CANT"; sub2[COL.CVU] = "VR. UNITARIO"; sub2[COL.CVP] = "VR. PARCIAL";
@@ -1303,7 +1308,17 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   sub2[COL.PCANT] = "CANT"; sub2[COL.PVR] = "VR. TOTAL";
   sub2[COL.TCANT] = "CANT"; sub2[COL.TVR] = "VR. TOTAL";
   sub2[COL.SCANT] = "CANT"; sub2[COL.SVR] = "VR. TOTAL";
-  Object.keys(sub2).forEach(function (c) { sh.getRange(2, Number(c)).setValue(sub2[c]); });
+  var filaEnc2 = new Array(14).fill("");
+  Object.keys(sub2).forEach(function (c) { filaEnc2[Number(c) - 1] = sub2[c]; });
+
+  sh.getRange(1, 1, 2, 14).setValues([filaEnc1, filaEnc2]);
+  sh.getRange(1, COL.ITEM, 2, 1).merge();
+  sh.getRange(1, COL.DESC, 2, 1).merge();
+  sh.getRange(1, COL.UND, 1, 4).merge();
+  sh.getRange(1, COL.ACANT, 1, 2).merge();
+  sh.getRange(1, COL.PCANT, 1, 2).merge();
+  sh.getRange(1, COL.TCANT, 1, 2).merge();
+  sh.getRange(1, COL.SCANT, 1, 2).merge();
 
   sh.getRange(1, 1, 2, 14).setFontWeight("bold").setFontColor("#FFFFFF").setBackground(HEADER_BG).setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
   sh.setFrozenRows(2);
