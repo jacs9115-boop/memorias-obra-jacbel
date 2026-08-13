@@ -3,6 +3,17 @@
 // Sin eso, la conversion de archivos .xls/.xlsx no va a funcionar.
 
 function doGet(e) {
+  // TEMPORAL: al correr doGet manualmente desde el boton "Ejecutar" del
+  // editor (sin parametros de prueba, e llega undefined), esta linea se
+  // ejecuta ANTES del "e.parameter..." de mas abajo (que si tronaria con e
+  // undefined) y le da a Google la oportunidad de pedir autorizacion para
+  // el permiso que falta (ScriptApp / gestionar disparadores). Aparecera
+  // un aviso "Se requiere autorizacion": Revisar permisos -> Avanzado ->
+  // Ir a [nombre del proyecto] (no seguro) -> Permitir. Es tu propio script,
+  // ese aviso es normal para cualquier funcion nueva que pida un permiso
+  // que antes no tenia. Despues de autorizar una vez, se quita esta linea.
+  try { configurarActivadorAutomatico_(); } catch (eAutorizar) { Logger.log("Config. disparador: " + eAutorizar); }
+
   try {
     if (e.parameter.obras === "1") return jsonOutput_(listarObras_());
     if (e.parameter.presupuestos === "1") return jsonOutput_(listarPresupuestos_());
