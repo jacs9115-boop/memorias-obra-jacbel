@@ -155,6 +155,14 @@
       <h2>Direcciones a intervenir</h2>
       <div id="listaDirecciones"></div>
     </div>
+    <div class="card">
+      <h2>Reportes para imprimir/compartir</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px">
+        "Memoria de Cálculo", "Registro Fotográfico" y "Ejecución Real" (las hojas con formato del Google Sheet) no se actualizan solas mientras registras mediciones, para que guardar sea rápido. Presiona este botón antes de imprimir o compartir el informe.
+      </div>
+      <div class="status" id="statusReportes"></div>
+      <button type="button" class="btn-primary" id="btnActualizarReportes">🔄 Actualizar reportes</button>
+    </div>
     <button type="button" class="btn-secondary" id="btnBorrarObra" style="color:#C0392B">Eliminar esta obra</button>
   </div>
 
@@ -414,6 +422,7 @@ function renderObraDetalle() {
     <div class="config-fila"><span class="k">Contratista</span><span class="v">${o.contratista || "-"}</span></div>
     <div class="config-fila"><span class="k">Supervisor</span><span class="v">${o.supervisor || "-"}</span></div>
   `;
+  renderEstadoReportes();
   const cont = document.getElementById("listaDirecciones");
   if (!obraActual.direcciones.length) {
     cont.innerHTML = '<div class="empty">Esta obra no tiene direcciones cargadas.</div>';
@@ -429,6 +438,36 @@ function renderObraDetalle() {
     el.addEventListener("click", () => abrirDireccion(obraActual.direcciones[Number(el.dataset.idx)]));
   });
 }
+
+function renderEstadoReportes() {
+  const status = document.getElementById("statusReportes");
+  if (!status) return;
+  status.textContent = obraActual.reportesDesactualizados
+    ? "⚠️ Hay mediciones nuevas que todavía no se reflejan en el Google Sheet."
+    : "✓ Los reportes están al día.";
+  status.style.color = obraActual.reportesDesactualizados ? "#B26A00" : "var(--green)";
+}
+
+document.getElementById("btnActualizarReportes").addEventListener("click", async () => {
+  if (!obraActual) return;
+  const btn = document.getElementById("btnActualizarReportes");
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Actualizando... (10-15 seg)";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/actualizar-reportes`, { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al actualizar");
+    obraActual.reportesDesactualizados = false;
+    renderEstadoReportes();
+    mostrarToast("Reportes actualizados ✓");
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+});
 
 document.getElementById("btnBorrarObra").addEventListener("click", async () => {
   if (!obraActual) return;

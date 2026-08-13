@@ -30,15 +30,14 @@ async function llamarAppsScriptPost(body) {
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// Ruta de un solo uso: crea/renueva el disparador de tiempo de
-// actualizarReportesPendientes_ por codigo (ScriptApp.newTrigger), sin
-// necesitar el editor de Apps Script -- ver la nota en doGet (Code.gs) sobre
-// el bug de la interfaz de Google que impide usar el selector de
-// "Añadir activador" en este proyecto. Segura de llamar mas de una vez.
-app.get("/api/admin/configurar-trigger", async (req, res) => {
+// Boton "🔄 Actualizar reportes" de la app: reconstruye "Memoria de
+// Calculo" / "Registro Fotografico" / "Ejecucion Real" de una obra puntual
+// bajo demanda (ver nota en leerObra_/actualizarReportesObra_ en Code.gs).
+app.post("/api/obras/:obraId/actualizar-reportes", async (req, res) => {
   try {
     requireAppsScriptUrl();
-    res.json(await llamarAppsScript(`${APPS_SCRIPT_URL}?configurarTrigger=1`));
+    const data = await llamarAppsScriptPost({ accion: "actualizar_reportes", obraId: req.params.obraId });
+    res.json(data);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });

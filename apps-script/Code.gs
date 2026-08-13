@@ -3,46 +3,15 @@
 // Sin eso, la conversion de archivos .xls/.xlsx no va a funcionar.
 
 function doGet(e) {
-  // TEMPORAL: al correr doGet manualmente desde el boton "Ejecutar" del
-  // editor (sin parametros de prueba, e llega undefined), esta linea se
-  // ejecuta ANTES del "e.parameter..." de mas abajo (que si tronaria con e
-  // undefined) y le da a Google la oportunidad de pedir autorizacion para
-  // el permiso que falta (ScriptApp / gestionar disparadores). Aparecera
-  // un aviso "Se requiere autorizacion": Revisar permisos -> Avanzado ->
-  // Ir a [nombre del proyecto] (no seguro) -> Permitir. Es tu propio script,
-  // ese aviso es normal para cualquier funcion nueva que pida un permiso
-  // que antes no tenia. Despues de autorizar una vez, se quita esta linea.
-  try { configurarActivadorAutomatico_(); } catch (eAutorizar) { Logger.log("Config. disparador: " + eAutorizar); }
-
   try {
     if (e.parameter.obras === "1") return jsonOutput_(listarObras_());
     if (e.parameter.presupuestos === "1") return jsonOutput_(listarPresupuestos_());
     if (e.parameter.previsualizar) return jsonOutput_(parsearPresupuesto_(e.parameter.previsualizar));
     if (e.parameter.obra) return jsonOutput_(leerObra_(e.parameter.obra));
-    // Atajo para crear/renovar el disparador de actualizarReportesPendientes_
-    // por codigo (ScriptApp.newTrigger), sin pasar por el editor de Apps
-    // Script -- el selector de "Añadir activador"/"Ejecutar funcion" de este
-    // proyecto tiene un problema de la interfaz de Google que solo lista
-    // doGet/doPost y no deja elegir otras funciones (se confirmo por el
-    // Historial del proyecto que el codigo si esta bien guardado; no es un
-    // problema de este script). Se llama UNA sola vez visitando esta URL
-    // con ?configurarTrigger=1; es seguro llamarla mas de una vez (borra
-    // cualquier duplicado antes de crear el nuevo).
-    if (e.parameter.configurarTrigger === "1") return jsonOutput_(configurarActivadorAutomatico_());
     return jsonOutput_({ error: "Parametro no reconocido" });
   } catch (err) {
     return jsonOutput_({ error: String(err) });
   }
-}
-
-function configurarActivadorAutomatico_() {
-  var FUNCION = "actualizarReportesPendientes_";
-  var existentes = ScriptApp.getProjectTriggers().filter(function (t) {
-    return t.getHandlerFunction() === FUNCION;
-  });
-  existentes.forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger(FUNCION).timeBased().everyMinutes(5).create();
-  return { ok: true, mensaje: "Disparador '" + FUNCION + "' creado (cada 5 minutos). Duplicados eliminados: " + existentes.length };
 }
 
 function doPost(e) {
@@ -55,6 +24,7 @@ function doPost(e) {
     if (body.accion === "borrar_medida") return jsonOutput_(borrarMedida_(body));
     if (body.accion === "borrar_obra") return jsonOutput_(borrarObra_(body));
     if (body.accion === "editar_item") return jsonOutput_(editarItemPresupuesto_(body));
+    if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -332,7 +302,7 @@ function buscarObra_(obraId) {
   return null;
 }
 
-// ---------- Reportes en segundo plano ----------
+// ---------- Reportes bajo demanda ----------
 //
 // "Memoria de Calculo", "Registro Fotografico" y "Ejecucion Real" son solo
 // para cuando alguien abre el Google Sheet directamente (imprimir/compartir
@@ -340,17 +310,17 @@ function buscarObra_(obraId) {
 // directo desde "Memoria" cada vez (ver leerObra_). Por eso no hace falta
 // que esten al dia al instante: en vez de reconstruirlas en el momento del
 // guardado (lo que hacia sentir lenta la app), cada accion que cambia datos
-// marca la obra aqui como "pendiente", y un disparador por tiempo
-// (actualizarReportesPendientes_) las reconstruye solo cada pocos minutos.
+// solo marca la obra como "pendiente" (PropertiesService), y esas hojas se
+// reconstruyen cuando el usuario presiona "Actualizar reportes" en la app
+// (ver actualizarReportesObra_) -- rapido para seguir cargando mediciones,
+// y el Sheet se pone al dia justo antes de imprimir/compartir.
 //
-// CONFIGURACION (una sola vez, manual): en el editor de Apps Script, icono
-// del reloj/alarma ("Activadores") en la barra izquierda -> "+ Añadir
-// activador" -> Función a ejecutar: actualizarReportesPendientes_ ->
-// Origen del evento: Basado en tiempo -> Tipo: Temporizador de minutos ->
-// Cada 5 minutos -> Guardar. Sin ese paso, las hojas de reporte se quedan
-// desactualizadas hasta que alguien abra la obra... en realidad ni
-// siquiera entonces (leerObra_ ya no las reconstruye tampoco); por eso el
-// disparador es necesario para que se pongan al dia solas.
+// (La idea original era un disparador por tiempo 100% automatico
+// -actualizarReportesPendientes_ mas abajo- pero choco con un permiso de
+// Google que este proyecto no tiene autorizado y que no se pudo conceder
+// por un problema de la interfaz del editor de Apps Script. La funcion
+// queda por si en el futuro se resuelve eso y se quiere retomar; hoy no la
+// llama nada.)
 function marcarObraPendiente_(obraId) {
   if (!obraId) return;
   var props = PropertiesService.getScriptProperties();
@@ -362,11 +332,39 @@ function marcarObraPendiente_(obraId) {
   }
 }
 
-// Punto de entrada del disparador por tiempo. Recorre las obras marcadas
-// como pendientes y reconstruye sus hojas de reporte. Se quita la marca
-// ANTES de procesar (no despues) para que, si algo vuelve a cambiar esa
-// obra mientras esta funcion esta corriendo, quede marcada de nuevo para
-// la siguiente pasada en vez de perderse.
+function quitarObraPendiente_(obraId) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty("obrasPendientes");
+  if (!raw) return;
+  var lista = JSON.parse(raw).filter(function (id) { return id !== obraId; });
+  props.setProperty("obrasPendientes", JSON.stringify(lista));
+}
+
+function obraTieneReportesPendientes_(obraId) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty("obrasPendientes");
+  if (!raw) return false;
+  return JSON.parse(raw).indexOf(obraId) !== -1;
+}
+
+// Boton "🔄 Actualizar reportes" de la app: reconstruye las hojas de
+// reporte de ESTA obra puntual (a diferencia de actualizarReportesPendientes_,
+// que recorreria todas las pendientes) y limpia su marca de pendiente.
+function actualizarReportesObra_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  regenerarMemoriaCalculo_(ss);
+  quitarObraPendiente_(body.obraId);
+  return { ok: true };
+}
+
+// Pensada para un disparador por tiempo (ver nota de arriba: hoy no esta
+// conectada a ninguno). Recorre las obras marcadas como pendientes y
+// reconstruye sus hojas de reporte. Se quita la marca ANTES de procesar
+// (no despues) para que, si algo vuelve a cambiar esa obra mientras esta
+// funcion esta corriendo, quede marcada de nuevo para la siguiente pasada
+// en vez de perderse.
 function actualizarReportesPendientes_() {
   var props = PropertiesService.getScriptProperties();
   var raw = props.getProperty("obrasPendientes");
@@ -476,9 +474,9 @@ function borrarObra_(body) {
 // reconstruidas para mostrar informacion correcta -- son solo para cuando
 // alguien abre el Google Sheet directamente (para imprimir/compartir el
 // informe). Por eso, en vez de reconstruirlas aqui (bloqueando al usuario),
-// se marca la obra como "pendiente" y un disparador por tiempo
-// (actualizarReportesPendientes_, ver mas abajo) las pone al dia solas en
-// segundo plano cada pocos minutos.
+// se marca la obra como "pendiente" (ver marcarObraPendiente_) y el usuario
+// las pone al dia cuando quiera con el boton "Actualizar reportes" de la
+// app (accion actualizar_reportes -> actualizarReportesObra_).
 function leerObra_(obraId) {
   var obra = buscarObra_(obraId);
   if (!obra) throw new Error("Obra no encontrada");
@@ -526,13 +524,10 @@ function leerObra_(obraId) {
     return { nombre: nombre, items: direccionesMap[nombre] };
   });
 
-  // Si esta obra tenia cambios pendientes por reflejar en las hojas de
-  // reporte (alguien guardo/edito/borro una medida desde la ultima pasada
-  // del disparador de tiempo), no hace falta hacer nada especial aqui: el
-  // marcado ya quedo hecho en el momento del guardado (ver
-  // marcarObraPendiente_), y el disparador se encarga solo.
-
-  return { obra: obra, direcciones: direcciones, medidas: medidas };
+  return {
+    obra: obra, direcciones: direcciones, medidas: medidas,
+    reportesDesactualizados: obraTieneReportesPendientes_(obraId),
+  };
 }
 
 // ---------- Medidas (memoria de calculo) ----------
@@ -558,9 +553,8 @@ function guardarMedida_(body) {
   hoja.appendRow(fila);
   // No se reconstruyen aqui "Memoria de Calculo" / "Registro Fotografico" /
   // "Ejecucion Real" (eso es lo que hacia sentir lento el guardado). En vez
-  // de eso, se marca la obra como pendiente: un disparador por tiempo
-  // (actualizarReportesPendientes_) las pone al dia solo en segundo plano
-  // cada pocos minutos, sin que el usuario tenga que esperar.
+  // de eso, se marca la obra como pendiente y el usuario las actualiza
+  // cuando quiera con el boton "Actualizar reportes" de la app.
   marcarObraPendiente_(body.obraId);
 
   return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: subida.urls, fotosFallidas: subida.fallos };
