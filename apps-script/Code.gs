@@ -378,11 +378,20 @@ function borrarObra_(body) {
 
 // ---------- Leer una obra (config + presupuesto con totales + medidas) ----------
 
+// _debugTiming: instrumentacion temporal para encontrar el cuello de
+// botella real de la lentitud (la primera reescritura de
+// regenerarMemoriaCalculo_ no cambio el tiempo medido, asi que hay que
+// medir en vez de seguir adivinando). Se puede quitar una vez se identifique
+// y resuelva la causa; no afecta al frontend, que ignora ese campo.
 function leerObra_(obraId) {
+  var _t = { inicio: Date.now() };
+
   var obra = buscarObra_(obraId);
   if (!obra) throw new Error("Obra no encontrada");
+  _t.buscarObra = Date.now();
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  _t.abrirSpreadsheet = Date.now();
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
@@ -391,6 +400,7 @@ function leerObra_(obraId) {
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
   var filasMemoria = ultimaFilaMemoria > 1 ? hojaMemoria.getRange(2, 1, ultimaFilaMemoria - 1, 14).getValues() : [];
+  _t.leerHojas = Date.now();
 
   var totales = {};
   var medidas = filasMemoria.map(function (r) {
@@ -405,12 +415,14 @@ function leerObra_(obraId) {
       cantidad: r[11], cantidadParcial: cantidadParcial, fotoUrl: r[12], fotosUrls: separarFotos_(r[12]), observacion: r[13],
     };
   });
+  _t.procesarMedidas = Date.now();
 
   // Reconstruye "Memoria de Cálculo" y "Registro Fotográfico" cada vez que se
   // abre la obra, sin importar si "Memoria" cambio por la app o porque el
   // usuario edito/borro filas a mano directamente en la hoja: asi las dos
   // hojas calculadas nunca quedan desincronizadas de la fuente real de datos.
-  regenerarMemoriaCalculo_(ss);
+  var timingRegenerar = regenerarMemoriaCalculo_(ss);
+  _t.regenerarMemoriaCalculo = Date.now();
 
   var direccionesMap = {};
   var ordenDirecciones = [];
@@ -430,8 +442,20 @@ function leerObra_(obraId) {
   var direcciones = ordenDirecciones.map(function (nombre) {
     return { nombre: nombre, items: direccionesMap[nombre] };
   });
+  _t.armarDirecciones = Date.now();
 
-  return { obra: obra, direcciones: direcciones, medidas: medidas };
+  var debugTiming = {
+    buscarObraMs: _t.buscarObra - _t.inicio,
+    abrirSpreadsheetMs: _t.abrirSpreadsheet - _t.buscarObra,
+    leerHojasMs: _t.leerHojas - _t.abrirSpreadsheet,
+    procesarMedidasMs: _t.procesarMedidas - _t.leerHojas,
+    regenerarMemoriaCalculoMs: _t.regenerarMemoriaCalculo - _t.procesarMedidas,
+    armarDireccionesMs: _t.armarDirecciones - _t.regenerarMemoriaCalculo,
+    totalMs: _t.armarDirecciones - _t.inicio,
+    detalleRegenerar: timingRegenerar,
+  };
+
+  return { obra: obra, direcciones: direcciones, medidas: medidas, _debugTiming: debugTiming };
 }
 
 // ---------- Medidas (memoria de calculo) ----------
@@ -705,6 +729,7 @@ function actualizarFilaPresupuestoOriginal_(fileId, filaOrigen, cambios) {
 // fila exacta en la hoja "Registro Fotografico", que es donde se ve la
 // foto en grande.
 function regenerarMemoriaCalculo_(ss) {
+  var _t = { inicio: Date.now() };
   var NOMBRE_HOJA = "Memoria de Cálculo";
   var COLS = 9;
 
@@ -715,6 +740,7 @@ function regenerarMemoriaCalculo_(ss) {
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
   var filasMemoria = ultimaFilaMemoria > 1 ? hojaMemoria.getRange(2, 1, ultimaFilaMemoria - 1, 14).getValues() : [];
+  _t.leerHojas = Date.now();
 
   var medidasPorItem = {};
   filasMemoria.forEach(function (r) {
@@ -736,10 +762,12 @@ function regenerarMemoriaCalculo_(ss) {
     medidas.forEach(function (m) { suma += calcularCantidadParcial_(tipo, m); });
     totalPorItemClave[clave] = suma;
   });
+  _t.calcularTotales = Date.now();
 
   var hojaVieja = ss.getSheetByName(NOMBRE_HOJA);
   if (hojaVieja) ss.deleteSheet(hojaVieja);
   var hoja = ss.insertSheet(NOMBRE_HOJA);
+  _t.borrarCrearHoja = Date.now();
 
   // Antes, cada fila (cada medida, cada encabezado de item/capitulo/
   // direccion) se escribia con varias llamadas individuales a la API de
@@ -845,6 +873,7 @@ function regenerarMemoriaCalculo_(ss) {
 
     agregarFila(filaVacia()); // fila en blanco antes del siguiente item
   });
+  _t.construirArrays = Date.now();
 
   var totalFilas = valores.length;
   if (totalFilas > 0) {
@@ -854,9 +883,14 @@ function regenerarMemoriaCalculo_(ss) {
     hoja.getRange(1, 1, totalFilas, COLS).setFontColors(coloresTexto);
     hoja.getRange(1, 1, totalFilas, COLS).setHorizontalAlignments(alineaciones);
     hoja.getRange(1, 9, totalFilas, 1).setFormulas(formulasCol9.map(function (f) { return [f]; }));
+    _t.escriturasEnBloque = Date.now();
     merges.forEach(function (mrg) {
       hoja.getRange(mrg.fila, 1, 1, mrg.columnas).merge();
     });
+    _t.merges = Date.now();
+  } else {
+    _t.escriturasEnBloque = Date.now();
+    _t.merges = Date.now();
   }
 
   hoja.setColumnWidth(1, 100);
@@ -865,15 +899,18 @@ function regenerarMemoriaCalculo_(ss) {
   hoja.setColumnWidth(8, 90);
   hoja.setColumnWidth(9, 110);
   hoja.setFrozenRows(0);
+  _t.anchoColumnas = Date.now();
 
   var meta = leerMetaContrato_(ss);
   var gidFotografico = regenerarRegistroFotografico_(ss, fotos, meta);
+  _t.registroFotografico = Date.now();
 
   try {
     regenerarEjecucionReal_(ss, meta.numeroContrato, totalPorItemClave);
   } catch (errEjec) {
     Logger.log("No se pudo actualizar Ejecucion Real: " + errEjec);
   }
+  _t.ejecucionReal = Date.now();
 
   pendientesFoto.forEach(function (p) {
     var primera = fotos[p.indiceFoto];
@@ -886,9 +923,29 @@ function regenerarMemoriaCalculo_(ss) {
       hoja.getRange(p.fila, 1).setValue(etiqueta);
     }
   });
+  _t.pendientesFoto = Date.now();
 
   ss.setActiveSheet(hoja);
   ss.moveActiveSheet(3);
+  _t.activarHoja = Date.now();
+
+  return {
+    leerHojasMs: _t.leerHojas - _t.inicio,
+    calcularTotalesMs: _t.calcularTotales - _t.leerHojas,
+    borrarCrearHojaMs: _t.borrarCrearHoja - _t.calcularTotales,
+    construirArraysMs: _t.construirArrays - _t.borrarCrearHoja,
+    escriturasEnBloqueMs: _t.escriturasEnBloque - _t.construirArrays,
+    mergesMs: _t.merges - _t.escriturasEnBloque,
+    anchoColumnasMs: _t.anchoColumnas - _t.merges,
+    registroFotograficoMs: _t.registroFotografico - _t.anchoColumnas,
+    ejecucionRealMs: _t.ejecucionReal - _t.registroFotografico,
+    pendientesFotoMs: _t.pendientesFoto - _t.ejecucionReal,
+    activarHojaMs: _t.activarHoja - _t.pendientesFoto,
+    totalMs: _t.activarHoja - _t.inicio,
+    numFilas: totalFilas,
+    numFotos: fotos.length,
+    numMerges: merges.length,
+  };
 }
 
 // Mismo criterio que tipoUnidad() en el frontend (frontend/index.html), para
