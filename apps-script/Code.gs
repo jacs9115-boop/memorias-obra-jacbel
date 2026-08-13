@@ -8,10 +8,30 @@ function doGet(e) {
     if (e.parameter.presupuestos === "1") return jsonOutput_(listarPresupuestos_());
     if (e.parameter.previsualizar) return jsonOutput_(parsearPresupuesto_(e.parameter.previsualizar));
     if (e.parameter.obra) return jsonOutput_(leerObra_(e.parameter.obra));
+    // Atajo para crear/renovar el disparador de actualizarReportesPendientes_
+    // por codigo (ScriptApp.newTrigger), sin pasar por el editor de Apps
+    // Script -- el selector de "Añadir activador"/"Ejecutar funcion" de este
+    // proyecto tiene un problema de la interfaz de Google que solo lista
+    // doGet/doPost y no deja elegir otras funciones (se confirmo por el
+    // Historial del proyecto que el codigo si esta bien guardado; no es un
+    // problema de este script). Se llama UNA sola vez visitando esta URL
+    // con ?configurarTrigger=1; es seguro llamarla mas de una vez (borra
+    // cualquier duplicado antes de crear el nuevo).
+    if (e.parameter.configurarTrigger === "1") return jsonOutput_(configurarActivadorAutomatico_());
     return jsonOutput_({ error: "Parametro no reconocido" });
   } catch (err) {
     return jsonOutput_({ error: String(err) });
   }
+}
+
+function configurarActivadorAutomatico_() {
+  var FUNCION = "actualizarReportesPendientes_";
+  var existentes = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === FUNCION;
+  });
+  existentes.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger(FUNCION).timeBased().everyMinutes(5).create();
+  return { ok: true, mensaje: "Disparador '" + FUNCION + "' creado (cada 5 minutos). Duplicados eliminados: " + existentes.length };
 }
 
 function doPost(e) {
