@@ -80,6 +80,8 @@
   .capitulo-titulo:first-child { margin-top: 4px; }
   .item-row { padding: 13px 14px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px;
     cursor: pointer; background: var(--card); }
+  .item-row.selected { background: var(--navy); border-color: var(--navy); }
+  .item-row.selected .item-desc, .item-row.selected .item-meta { color: #fff; }
   .item-row .item-desc { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
   .item-row .item-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
   .item-row .item-progreso { font-size: 12px; font-weight: 700; }
@@ -164,6 +166,7 @@
     <div class="card" id="cardItemInfo"></div>
     <div class="card">
       <h2 id="tituloFormularioMedida">Nueva medida</h2>
+      <button type="button" class="btn-secondary" id="btnIrACopiarMedidas" style="margin-top:0;margin-bottom:10px">📋 Copiar mediciones de otro item</button>
       <div id="camposMedida"></div>
       <div class="field">
         <label>Fotos de la actividad (opcional)</label>
@@ -183,6 +186,21 @@
     <div class="card">
       <h2>Historial de medidas</h2>
       <div id="listaMedidas"></div>
+    </div>
+  </div>
+
+  <div class="vista" id="vistaCopiarMedidas" style="display:none">
+    <div class="card">
+      <h2>1. Elige el item de origen</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px">Se copia la observación y los valores que apliquen según la unidad de cada item (lo que no aplique queda en blanco para completarlo tú).</div>
+      <div id="selectorDireccionCopiar" class="field"></div>
+      <div id="listaItemsCopiar"></div>
+    </div>
+    <div class="card" id="cardMedidasCopiar" style="display:none">
+      <h2>2. Elige cuáles mediciones copiar</h2>
+      <button type="button" class="btn-secondary" id="btnToggleTodasCopiar" style="margin-top:0">Seleccionar todas</button>
+      <div id="listaMedidasCopiar" style="margin-top:10px"></div>
+      <button type="button" class="btn-primary" id="btnConfirmarCopiarMedidas">Copiar seleccionadas</button>
     </div>
   </div>
 
@@ -953,6 +971,161 @@ function cargarMedidaParaEditar(m) {
 
 document.getElementById("btnCancelarEdicion").addEventListener("click", () => {
   prepararFormularioNuevaMedida();
+});
+
+// ---------- Vista: copiar mediciones de otro item ----------
+// Caso de uso real: las mismas domiciliarias se repiten en varios items
+// (ej. "Corte con disco" y "Retiro de tubería"), pero cada item puede tener
+// una unidad distinta (ML, M2, UND...). Por eso no se copia la medición
+// completa: se copia la observación y solo los campos crudos que tengan
+// sentido en AMBAS unidades (ver mapearCamposEntreTipos); lo que no aplica
+// queda en blanco para completarlo editando esa medida despues.
+let direccionCopiarSeleccionada = null;
+let itemCopiarSeleccionado = null;
+
+document.getElementById("btnIrACopiarMedidas").addEventListener("click", () => {
+  direccionCopiarSeleccionada = direccionActual.nombre;
+  itemCopiarSeleccionado = null;
+  navegarA("vistaCopiarMedidas", "Copiar mediciones");
+  document.getElementById("cardMedidasCopiar").style.display = "none";
+  renderSelectorDireccionCopiar();
+  renderListaItemsCopiar();
+});
+
+function renderSelectorDireccionCopiar() {
+  const cont = document.getElementById("selectorDireccionCopiar");
+  cont.innerHTML = `
+    <label>Dirección</label>
+    <select id="selectDireccionCopiar">
+      ${obraActual.direcciones.map((d) => `<option value="${d.nombre}" ${d.nombre === direccionCopiarSeleccionada ? "selected" : ""}>${d.nombre}</option>`).join("")}
+    </select>
+  `;
+  document.getElementById("selectDireccionCopiar").addEventListener("change", (e) => {
+    direccionCopiarSeleccionada = e.target.value;
+    itemCopiarSeleccionado = null;
+    document.getElementById("cardMedidasCopiar").style.display = "none";
+    renderListaItemsCopiar();
+  });
+}
+
+function tieneMedidas(direccionNombre, itemValor) {
+  return obraActual.medidas.some((m) => m.direccion === direccionNombre && String(m.item) === String(itemValor));
+}
+
+function renderListaItemsCopiar() {
+  const cont = document.getElementById("listaItemsCopiar");
+  const dir = obraActual.direcciones.find((d) => d.nombre === direccionCopiarSeleccionada);
+  const items = dir ? dir.items : [];
+  const itemsConMedidas = items.filter((it) => {
+    if (dir.nombre === direccionActual.nombre && String(it.item) === String(itemActual.item)) return false;
+    return tieneMedidas(dir.nombre, it.item);
+  });
+  if (!itemsConMedidas.length) {
+    cont.innerHTML = '<div class="empty">Esta dirección no tiene otros items con mediciones cargadas.</div>';
+    return;
+  }
+  cont.innerHTML = itemsConMedidas.map((it) => `
+    <div class="item-row" data-item="${String(it.item).replace(/"/g, "&quot;")}">
+      <div class="item-desc">${it.item} — ${it.descripcion}</div>
+      <div class="item-meta"><span>${obraActual.medidas.filter((m) => m.direccion === dir.nombre && String(m.item) === String(it.item)).length} medición(es)</span><span class="badge-unidad">${it.unidad || "?"}</span></div>
+    </div>
+  `).join("");
+  cont.querySelectorAll(".item-row").forEach((el) => {
+    el.addEventListener("click", () => {
+      itemCopiarSeleccionado = itemsConMedidas.find((it) => String(it.item) === el.dataset.item);
+      cont.querySelectorAll(".item-row").forEach((x) => x.classList.toggle("selected", x === el));
+      renderListaMedidasCopiar();
+    });
+  });
+}
+
+function renderListaMedidasCopiar() {
+  document.getElementById("cardMedidasCopiar").style.display = "block";
+  const cont = document.getElementById("listaMedidasCopiar");
+  const medidas = obraActual.medidas.filter((m) => m.direccion === direccionCopiarSeleccionada && String(m.item) === String(itemCopiarSeleccionado.item));
+  cont.innerHTML = medidas.map((m) => `
+    <label class="medida-row" style="cursor:pointer">
+      <input type="checkbox" class="chkMedidaCopiar" data-id="${m.id}" checked style="width:20px;height:20px;flex-shrink:0;margin-top:2px" />
+      <div class="info">
+        <div class="cant">${formatoNumero(m.cantidadParcial != null ? m.cantidadParcial : m.cantidad)} ${m.unidad || ""}</div>
+        <div>${m.observacion || "(sin observación)"}</div>
+      </div>
+    </label>
+  `).join("");
+  const cardMedidas = document.getElementById("cardMedidasCopiar");
+  window.scrollTo({ top: cardMedidas.offsetTop - 60, behavior: "smooth" });
+}
+
+document.getElementById("btnToggleTodasCopiar").addEventListener("click", () => {
+  const checks = document.querySelectorAll(".chkMedidaCopiar");
+  const algunaSinMarcar = Array.from(checks).some((c) => !c.checked);
+  checks.forEach((c) => { c.checked = algunaSinMarcar; });
+});
+
+// Decide que campos crudos tiene sentido copiar entre dos unidades
+// distintas. Ej: origen ML (solo usa "longitud") -> destino M2 (usa
+// "longitud" Y "ancho"): la longitud SI se copia porque ambos la usan, el
+// ancho NO se copia (el origen nunca tuvo ese dato) y queda vacio para que
+// el usuario lo complete editando esa medida despues.
+function mapearCamposEntreTipos(tipoOrigen, tipoDestino, m) {
+  const usaLongitud = ["longitud", "area", "volumen"];
+  const usaAncho = ["area", "volumen"];
+  const usaAlto = ["volumen"];
+  const usaVolumen = ["volumen", "volumen_km"];
+  const usaDistancia = ["volumen_km"];
+  const directos = ["unidad", "dias", "otro"];
+  const r = { longitud: "", ancho: "", alto: "", volumen: "", distanciaKm: "", cantidad: "" };
+  if (usaLongitud.includes(tipoOrigen) && usaLongitud.includes(tipoDestino)) r.longitud = m.longitud || "";
+  if (usaAncho.includes(tipoOrigen) && usaAncho.includes(tipoDestino)) r.ancho = m.ancho || "";
+  if (usaAlto.includes(tipoOrigen) && usaAlto.includes(tipoDestino)) r.alto = m.alto || "";
+  if (usaVolumen.includes(tipoOrigen) && usaVolumen.includes(tipoDestino)) r.volumen = m.volumen || "";
+  if (usaDistancia.includes(tipoOrigen) && usaDistancia.includes(tipoDestino)) r.distanciaKm = m.distanciaKm || "";
+  if (TIPOS_CON_CANTIDAD_VECES.includes(tipoOrigen) && TIPOS_CON_CANTIDAD_VECES.includes(tipoDestino)) {
+    r.cantidad = m.cantidad || 1;
+  } else if (directos.includes(tipoOrigen) && directos.includes(tipoDestino)) {
+    r.cantidad = m.cantidad || "";
+  } else if (TIPOS_CON_CANTIDAD_VECES.includes(tipoDestino)) {
+    r.cantidad = 1;
+  }
+  return r;
+}
+
+document.getElementById("btnConfirmarCopiarMedidas").addEventListener("click", async () => {
+  const seleccionadas = Array.from(document.querySelectorAll(".chkMedidaCopiar")).filter((c) => c.checked).map((c) => c.dataset.id);
+  if (!seleccionadas.length) { mostrarToast("Selecciona al menos una medición", true); return; }
+
+  const tipoOrigen = tipoUnidad(itemCopiarSeleccionado.unidad);
+  const tipoDestino = tipoUnidad(itemActual.unidad);
+  const medidasOrigen = obraActual.medidas.filter((m) => seleccionadas.includes(m.id));
+  const medidasParaCopiar = medidasOrigen.map((m) => ({
+    ...mapearCamposEntreTipos(tipoOrigen, tipoDestino, m),
+    observacion: m.observacion || "",
+  }));
+
+  const btn = document.getElementById("btnConfirmarCopiarMedidas");
+  btn.disabled = true;
+  btn.textContent = "Copiando...";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/copiar-medidas`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        direccion: direccionActual.nombre, item: itemActual.item,
+        descripcion: itemActual.descripcion, unidad: itemActual.unidad,
+        medidas: medidasParaCopiar,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al copiar");
+    await recargarDireccionYItem();
+    mostrarToast(`${data.cantidad} medición(es) copiada(s) ✓ revisa si falta completar algún campo`);
+    volver();
+    prepararFormularioNuevaMedida();
+  } catch (err) {
+    mostrarToast("Error: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Copiar seleccionadas";
+  }
 });
 
 if ("serviceWorker" in navigator) {

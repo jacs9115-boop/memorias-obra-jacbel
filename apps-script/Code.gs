@@ -19,6 +19,7 @@ function doPost(e) {
     var body = JSON.parse(e.postData.contents);
     if (body.accion === "crear_obra") return jsonOutput_(crearObra_(body));
     if (body.accion === "guardar_medida") return jsonOutput_(guardarMedida_(body));
+    if (body.accion === "copiar_medidas") return jsonOutput_(copiarMedidas_(body));
     if (body.accion === "editar_medida") return jsonOutput_(editarMedida_(body));
     if (body.accion === "borrar_medida") return jsonOutput_(borrarMedida_(body));
     if (body.accion === "borrar_obra") return jsonOutput_(borrarObra_(body));
@@ -457,6 +458,44 @@ function guardarMedida_(body) {
   regenerarMemoriaCalculo_(ss);
 
   return { ok: true, id: id, fechaHora: fechaHora, fotosUrls: subida.urls, fotosFallidas: subida.fallos };
+}
+
+// Crea varias medidas nuevas de una sola vez en el item destino (direccion +
+// item + descripcion + unidad vienen del item ACTUAL, no del origen), a
+// partir de una lista ya preparada por el frontend (ver mapearCamposEntreTipos
+// en index.html): cada entrada trae solo los campos que tienen sentido para
+// la unidad del item destino (por ejemplo, si el origen era ML y el destino
+// es M2, "ancho" llega vacio a proposito para que el usuario lo complete
+// despues editando cada medida). Se usa para el flujo de "copiar
+// mediciones de otro item" (mismas domiciliarias repetidas en varios
+// items). regenerarMemoriaCalculo_ se llama una sola vez al final, no por
+// cada fila, para que copiar 20 domiciliarias no sea 20 veces mas lento que
+// guardar una sola medida.
+function copiarMedidas_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var medidas = body.medidas || [];
+  if (!medidas.length) return { ok: false, error: "No hay mediciones para copiar" };
+
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hoja = ss.getSheetByName("Memoria");
+  var ahora = new Date();
+  var fechaHora = Utilities.formatDate(ahora, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+
+  var idsCreadas = [];
+  var filas = medidas.map(function (m) {
+    var id = Utilities.getUuid();
+    idsCreadas.push(id);
+    return [
+      id, fechaHora, body.direccion || "", body.item || "", body.descripcion || "", body.unidad || "",
+      m.longitud || "", m.ancho || "", m.alto || "", m.volumen || "", m.distanciaKm || "",
+      Number(m.cantidad) || 0, "", m.observacion || "",
+    ];
+  });
+  hoja.getRange(hoja.getLastRow() + 1, 1, filas.length, 14).setValues(filas);
+  regenerarMemoriaCalculo_(ss);
+
+  return { ok: true, ids: idsCreadas, cantidad: idsCreadas.length };
 }
 
 function editarMedida_(body) {

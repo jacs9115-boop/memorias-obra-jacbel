@@ -111,6 +111,21 @@ app.post("/api/medidas", async (req, res) => {
   }
 });
 
+app.post("/api/obras/:obraId/copiar-medidas", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const { direccion, item, medidas } = req.body;
+    if (!direccion || !item || !Array.isArray(medidas) || !medidas.length) {
+      return res.status(400).json({ error: "Falta direccion, item o mediciones para copiar" });
+    }
+    const data = await llamarAppsScriptPost({ accion: "copiar_medidas", obraId: req.params.obraId, ...req.body });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
 app.put("/api/obras/:obraId/items", async (req, res) => {
   try {
     requireAppsScriptUrl();
