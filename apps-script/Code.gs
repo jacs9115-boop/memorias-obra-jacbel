@@ -905,10 +905,12 @@ function regenerarMemoriaCalculo_(ss) {
   var gidFotografico = regenerarRegistroFotografico_(ss, fotos, meta);
   _t.registroFotografico = Date.now();
 
+  var detalleEjecucionReal = null;
   try {
-    regenerarEjecucionReal_(ss, meta.numeroContrato, totalPorItemClave);
+    detalleEjecucionReal = regenerarEjecucionReal_(ss, meta.numeroContrato, totalPorItemClave);
   } catch (errEjec) {
     Logger.log("No se pudo actualizar Ejecucion Real: " + errEjec);
+    detalleEjecucionReal = { error: String(errEjec) };
   }
   _t.ejecucionReal = Date.now();
 
@@ -945,6 +947,7 @@ function regenerarMemoriaCalculo_(ss) {
     numFilas: totalFilas,
     numFotos: fotos.length,
     numMerges: merges.length,
+    detalleEjecucionReal: detalleEjecucionReal,
   };
 }
 
@@ -1256,10 +1259,12 @@ function colLetraEjecucionReal_(n) {
 // (todavia no se ha subido, o el numero de contrato no coincide con el
 // nombre del archivo), no hace nada -- no rompe el guardado de medidas.
 function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
+  var _t = { inicio: Date.now() };
   var fileId = buscarPresupuestoOficialPorContrato_(numeroContrato);
+  _t.buscarArchivo = Date.now();
   if (!fileId) {
     Logger.log("Ejecucion Real: no se encontro presupuesto oficial para el contrato " + numeroContrato);
-    return;
+    return { sinArchivoOficial: true, buscarArchivoMs: _t.buscarArchivo - _t.inicio };
   }
 
   var hojaPres = ss.getSheetByName("Presupuesto");
@@ -1270,13 +1275,16 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       if (r[0]) direccionesConocidas[normalizarTexto_(r[0])] = true;
     });
   }
+  _t.direccionesConocidas = Date.now();
 
   var filas = leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas);
+  _t.leerPresupuestoOficial = Date.now();
 
   var NOMBRE_HOJA = "Ejecucion Real";
   var sh = ss.getSheetByName(NOMBRE_HOJA);
   if (sh) ss.deleteSheet(sh);
   sh = ss.insertSheet(NOMBRE_HOJA);
+  _t.borrarCrearHoja = Date.now();
 
   var COL = { ITEM: 1, DESC: 2, UND: 3, CCANT: 4, CVU: 5, CVP: 6, ACANT: 7, AVR: 8, PCANT: 9, PVR: 10, TCANT: 11, TVR: 12, SCANT: 13, SVR: 14 };
   var HEADER_BG = "#1F4E78";
@@ -1300,10 +1308,11 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   sh.getRange(1, 1, 2, 14).setFontWeight("bold").setFontColor("#FFFFFF").setBackground(HEADER_BG).setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
   sh.setFrozenRows(2);
   sh.setFrozenColumns(2);
+  _t.encabezado = Date.now();
 
   var DATA_START = 3;
   var numFilas = filas.length;
-  if (numFilas === 0) return;
+  if (numFilas === 0) return { numFilas: 0, totalMs: Date.now() - _t.inicio };
 
   // Igual que en regenerarMemoriaCalculo_: antes esto eran hasta 5 vueltas
   // sobre cada fila con varias llamadas individuales a la API de Sheets por
@@ -1352,6 +1361,7 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     coloresTexto.push(new Array(14).fill(color));
     estilosFuente.push(new Array(14).fill(estilo));
   }
+  _t.arraysBase = Date.now();
 
   for (var idx = 0; idx < numFilas; idx++) {
     var f = filas[idx];
@@ -1394,6 +1404,8 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     }
   }
 
+  _t.arraysDinamicos = Date.now();
+
   sh.getRange(DATA_START, 1, numFilas, 14).setValues(valoresBase);
   sh.getRange(DATA_START, 1, numFilas, 14).setBackgrounds(backgrounds);
   sh.getRange(DATA_START, 1, numFilas, 14).setFontWeights(negritas);
@@ -1402,9 +1414,11 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   sh.getRange(DATA_START, COLS_DINAMICAS[0], numFilas, COLS_DINAMICAS.length).setFormulas(
     dinamico.map(function (fila) { return COLS_DINAMICAS.map(function (c) { return fila[c]; }); })
   );
+  _t.escriturasEnBloque = Date.now();
 
   [COL.CVU, COL.CVP, COL.AVR, COL.PVR, COL.TVR, COL.SVR].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("$#,##0"); });
   [COL.CCANT, COL.ACANT, COL.PCANT, COL.TCANT, COL.SCANT].forEach(function (c) { sh.getRange(DATA_START, c, numFilas, 1).setNumberFormat("#,##0.00"); });
+  _t.formatosNumero = Date.now();
 
   sh.setColumnWidth(COL.ITEM, 55);
   sh.setColumnWidth(COL.DESC, 320);
@@ -1412,6 +1426,22 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
 
   ss.setActiveSheet(sh);
   ss.moveActiveSheet(5);
+  _t.fin = Date.now();
+
+  return {
+    buscarArchivoMs: _t.buscarArchivo - _t.inicio,
+    direccionesConocidasMs: _t.direccionesConocidas - _t.buscarArchivo,
+    leerPresupuestoOficialMs: _t.leerPresupuestoOficial - _t.direccionesConocidas,
+    borrarCrearHojaMs: _t.borrarCrearHoja - _t.leerPresupuestoOficial,
+    encabezadoMs: _t.encabezado - _t.borrarCrearHoja,
+    arraysBaseMs: _t.arraysBase - _t.encabezado,
+    arraysDinamicosMs: _t.arraysDinamicos - _t.arraysBase,
+    escriturasEnBloqueMs: _t.escriturasEnBloque - _t.arraysDinamicos,
+    formatosNumeroMs: _t.formatosNumero - _t.escriturasEnBloque,
+    finMs: _t.fin - _t.formatosNumero,
+    totalMs: _t.fin - _t.inicio,
+    numFilas: numFilas,
+  };
 }
 
 function jsonOutput_(obj) {
