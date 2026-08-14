@@ -27,7 +27,6 @@ function doPost(e) {
     if (body.accion === "agregar_item") return jsonOutput_(agregarItemPresupuesto_(body));
     if (body.accion === "borrar_item") return jsonOutput_(borrarItemPresupuesto_(body));
     if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
-    if (body.accion === "debug_formulas") return jsonOutput_(debugFormulas_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -1955,17 +1954,6 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     totalMs: _t.fin - _t.inicio,
     numFilas: numFilas,
   };
-}
-
-// TEMPORAL: solo para diagnosticar por que J/L/N no muestran valor en las
-// filas de cierre de Ejecucion Real. Se puede borrar despues.
-function debugFormulas_(body) {
-  var obra = buscarObra_(body.obraId);
-  if (!obra) return { ok: false, error: "Obra no encontrada" };
-  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
-  var sh = ss.getSheetByName(body.hoja || "Ejecucion Real");
-  var range = sh.getRange(body.rango || "F54:N58");
-  return { ok: true, formulas: range.getFormulas(), valores: range.getValues() };
 }
 
 function jsonOutput_(obj) {

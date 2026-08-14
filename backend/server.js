@@ -203,16 +203,4 @@ app.delete("/api/medidas/:medidaId", async (req, res) => {
   }
 });
 
-// TEMPORAL: solo para diagnostico, ver debugFormulas_ en Code.gs.
-app.post("/api/debug/formulas", async (req, res) => {
-  try {
-    requireAppsScriptUrl();
-    const data = await llamarAppsScriptPost({ accion: "debug_formulas", ...req.body });
-    res.json(data);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message || "Error inesperado" });
-  }
-});
-
 app.listen(PORT, () => console.log(`Memorias JACBEL escuchando en puerto ${PORT}`));
