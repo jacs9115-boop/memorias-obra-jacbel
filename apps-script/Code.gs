@@ -1565,18 +1565,14 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   // Los items agregados manualmente desde la app (boton "+ Agregar item
   // nuevo") no estan en el archivo oficial con precios -- ese es un
   // documento aparte que el usuario sube a mano, la app nunca lo edita.
-  // Para que igual queden reflejados aqui, se agregan en un bloque propio
-  // al final: se buscan en la hoja "Presupuesto" de la obra los items con
-  // Origen="APP" (ver nota en crearObra_/agregarItemPresupuesto_ -- OJO,
-  // no basta con mirar si FilaOrigen esta vacia: en obras creadas antes de
-  // que existiera esa columna, TODOS los items originales la tienen vacia
-  // tambien, y por eso el chequeo real y confiable es la columna Origen) y
-  // que ademas no aparezcan ya en "filas" (por si alguna vez coincide con
-  // un item que si esta en el archivo oficial), y se agregan como items
-  // nivel 3 normales (con el mismo cruce automatico contra
-  // totalPorItemClave que cualquier otro item), bajo un encabezado
-  // separado -- asi nunca se mezclan con la estructura ni los totales del
-  // archivo oficial, que quedan intactos.
+  // Para que igual queden reflejados aqui, se buscan en la hoja
+  // "Presupuesto" de la obra los items con Origen="APP" (ver nota en
+  // crearObra_/agregarItemPresupuesto_ -- OJO, no basta con mirar si
+  // FilaOrigen esta vacia: en obras creadas antes de que existiera esa
+  // columna, TODOS los items originales la tienen vacia tambien, y por eso
+  // el chequeo real y confiable es la columna Origen) que ademas no
+  // aparezcan ya en "filas" (por si alguna vez coincide con un item que si
+  // esta en el archivo oficial).
   var clavesOficiales = {};
   filas.forEach(function (f) { if (f.nivel === 3) clavesOficiales[f.direccion + "||" + f.item] = true; });
 
@@ -1593,22 +1589,43 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     });
   });
 
-  if (itemsNuevos.length) {
-    // nivel 0 reutiliza el estilo de encabezado de direccion (fondo azul
-    // oscuro); al no tener capitulos (nivel 1) dentro de su rango, el
-    // codigo de mas abajo simplemente no le calcula ninguna suma (capRows
-    // queda vacio), asi que es seguro reusarlo solo como separador visual.
-    filas.push({
-      nivel: 0, direccion: "", item: "", descripcion: "ITEMS AGREGADOS DESDE LA APP (sin precio en el presupuesto oficial)",
-      und: "", cant: "", vrUnit: "", vrParcial: "",
-    });
-    itemsNuevos.forEach(function (n) {
-      filas.push({
-        nivel: 3, direccion: n.direccion, item: n.item, descripcion: n.direccion + " — " + n.descripcion, und: n.und,
+  // Cada item nuevo se inserta justo DEBAJO del ultimo renglon de su
+  // propia direccion (no en una seccion aparte al final de toda la hoja):
+  // "direccion" queda marcado en cada renglon de "filas" con el contexto
+  // de la ultima cabecera nivel 0 vista al leer el archivo oficial (ver
+  // leerPresupuestoOficialConPrecios_), asi que buscar la ULTIMA fila con
+  // ese mismo texto de direccion encuentra el final exacto de su bloque.
+  // Queda como item nivel 3 normal justo antes de la siguiente direccion,
+  // lo que ademas hace que SI sume dentro del subtotal de su capitulo y
+  // direccion (igual que cualquier item real) -- correcto, porque si tiene
+  // cantidad ejecutada es porque de verdad se ejecuto en esa direccion.
+  var nuevosPorDireccion = {};
+  itemsNuevos.forEach(function (n) {
+    if (!nuevosPorDireccion[n.direccion]) nuevosPorDireccion[n.direccion] = [];
+    nuevosPorDireccion[n.direccion].push(n);
+  });
+  Object.keys(nuevosPorDireccion).forEach(function (direccion) {
+    var nuevasFilas = nuevosPorDireccion[direccion].map(function (n) {
+      return {
+        nivel: 3, direccion: n.direccion, item: n.item, descripcion: n.descripcion + " (agregado desde la app)", und: n.und,
         cant: "", vrUnit: n.vrUnit, vrParcial: "", // "cant"/"vrParcial" (CONTRATADO) vacios: no fueron parte del contrato original
-      });
+      };
     });
-  }
+    var ultimaFilaDir = -1;
+    for (var k = 0; k < filas.length; k++) { if (filas[k].direccion === direccion) ultimaFilaDir = k; }
+    if (ultimaFilaDir === -1) {
+      // La direccion no aparece para nada en el archivo oficial (caso
+      // raro): se agrega al final de todo con su propio encabezado, para
+      // no perderla.
+      filas.push({
+        nivel: 0, direccion: "", item: "", descripcion: direccion + " (agregado desde la app, sin match en el presupuesto oficial)",
+        und: "", cant: "", vrUnit: "", vrParcial: "",
+      });
+      nuevasFilas.forEach(function (f) { filas.push(f); });
+    } else {
+      filas.splice.apply(filas, [ultimaFilaDir + 1, 0].concat(nuevasFilas));
+    }
+  });
 
   var NOMBRE_HOJA = "Ejecucion Real";
   var sh = ss.getSheetByName(NOMBRE_HOJA);
