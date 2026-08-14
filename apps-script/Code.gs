@@ -1611,13 +1611,16 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
         cant: "", vrUnit: n.vrUnit, vrParcial: "", // "cant"/"vrParcial" (CONTRATADO) vacios: no fueron parte del contrato original
       };
     });
-    // nivel !== 4 excluye las filas de cierre (TOTAL COSTOS DIRECTOS,
-    // ADMINISTRACION, IMPREVISTOS, UTILIDAD...) que quedan con el mismo
-    // contexto de direccion pero van DESPUES del ultimo item real -- sin
-    // este filtro, el item nuevo quedaria despues de esas filas de cierre
-    // en vez de justo debajo del ultimo item real, que es donde se pidio.
+    // Se busca especificamente el ultimo item real (nivel 3) de la
+    // direccion, no solo "la ultima fila con esa direccion": las filas de
+    // cierre (TOTAL COSTOS DIRECTOS, ADMINISTRACION, IMPREVISTOS,
+    // UTILIDAD... nivel 4) y alguna fila de subtotal sin etiqueta que trae
+    // el archivo oficial (nivel 2) quedan con el mismo contexto de
+    // direccion pero van DESPUES del ultimo item real -- si se contaran,
+    // el item nuevo quedaria despues de esas filas en vez de justo debajo
+    // del ultimo item real, que es donde se pidio.
     var ultimaFilaDir = -1;
-    for (var k = 0; k < filas.length; k++) { if (filas[k].direccion === direccion && filas[k].nivel !== 4) ultimaFilaDir = k; }
+    for (var k = 0; k < filas.length; k++) { if (filas[k].direccion === direccion && filas[k].nivel === 3) ultimaFilaDir = k; }
     if (ultimaFilaDir === -1) {
       // La direccion no aparece para nada en el archivo oficial (caso
       // raro): se agrega al final de todo con su propio encabezado, para
