@@ -1534,6 +1534,17 @@ function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
   return filas;
 }
 
+// Etiquetas de las filas de cierre que trae el archivo oficial (usadas
+// para reconstruirlas con formulas en regenerarEjecucionReal_ -- ver ahi).
+// Basta con que la descripcion CONTENGA alguna de estas frases.
+var ETIQUETAS_CIERRE_OFICIAL_ = [
+  "COSTO DIRECTO OBRA", "TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "UTILIDAD", "COSTO TOTAL OBRA",
+];
+function esFilaDeCierreOficial_(descripcion) {
+  var d = (descripcion || "").toUpperCase();
+  return ETIQUETAS_CIERRE_OFICIAL_.some(function (e) { return d.indexOf(e) !== -1; });
+}
+
 function colLetraEjecucionReal_(n) {
   var s = "";
   while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
@@ -1668,10 +1679,15 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       // Solo se conservan capitulos/subitems/items reales (nivel 1/2/3).
       // Las filas de cierre que trae el archivo oficial (TOTAL COSTOS
       // DIRECTOS TCD, ADMINISTRACION, IMPREVISTOS, UTILIDAD, COSTO TOTAL
-      // OBRA -- nivel 4 -- y cualquier fila suelta de subtotal sin
-      // etiqueta) se descartan a proposito: se reemplazan por las 5 de
-      // abajo, formuladas.
-      if (fc.nivel === 1 || fc.nivel === 2 || fc.nivel === 3) {
+      // OBRA/COSTO DIRECTO OBRA -- normalmente nivel 4, pero a veces el
+      // archivo las trae con texto en la columna ITEM en vez de vacia, lo
+      // que las clasifica como nivel 2 por error -- y cualquier fila
+      // suelta de subtotal sin etiqueta) se descartan a proposito: se
+      // reemplazan por las 5 de abajo, formuladas. Por eso ademas del
+      // nivel se filtra por texto: si la descripcion es una de estas
+      // etiquetas de cierre conocidas, se descarta aunque haya quedado
+      // mal clasificada.
+      if ((fc.nivel === 1 || fc.nivel === 2 || fc.nivel === 3) && !esFilaDeCierreOficial_(fc.descripcion)) {
         filasFinal.push(fc);
         var idxFinal = filasFinal.length - 1;
         if (fc.nivel === 1) capRowsIdx.push(idxFinal);
@@ -1829,7 +1845,12 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
     } else if (f.nivel === 1) {
       var finRel = numFilas;
-      for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel <= 1) { finRel = j; break; } }
+      // nivel >= 10 (las 5 filas de cierre formuladas, ver mas arriba)
+      // TAMBIEN cierra el rango del ultimo capitulo de la direccion --
+      // sin esto, el ultimo capitulo terminaba sumando esas mismas filas
+      // de cierre (que a su vez lo suman a el), una referencia circular
+      // que Sheets resuelve como #REF!.
+      for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel <= 1 || filas[j].nivel >= 10) { finRel = j; break; } }
       var filaIni = DATA_START + idx + 1;
       var filaFin = DATA_START + finRel - 1;
       if (filaFin >= filaIni) {
