@@ -166,6 +166,19 @@ app.post("/api/obras/:obraId/items", async (req, res) => {
   }
 });
 
+app.delete("/api/obras/:obraId/items", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const { direccion, item } = req.body;
+    if (!direccion || !item) return res.status(400).json({ error: "Falta direccion o item" });
+    const data = await llamarAppsScriptPost({ accion: "borrar_item", obraId: req.params.obraId, ...req.body });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
 app.put("/api/medidas/:medidaId", async (req, res) => {
   try {
     requireAppsScriptUrl();

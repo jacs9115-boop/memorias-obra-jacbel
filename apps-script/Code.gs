@@ -25,6 +25,7 @@ function doPost(e) {
     if (body.accion === "borrar_obra") return jsonOutput_(borrarObra_(body));
     if (body.accion === "editar_item") return jsonOutput_(editarItemPresupuesto_(body));
     if (body.accion === "agregar_item") return jsonOutput_(agregarItemPresupuesto_(body));
+    if (body.accion === "borrar_item") return jsonOutput_(borrarItemPresupuesto_(body));
     if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
@@ -701,14 +702,74 @@ function agregarItemPresupuesto_(body) {
   }
 
   var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, ""];
+  var filaDestino;
   if (filaInsercion === -1) {
     // No habia ningun item de esta direccion todavia (caso raro): se agrega
     // al final de toda la hoja, igual que antes.
     hojaPres.appendRow(filaNueva);
+    filaDestino = hojaPres.getLastRow();
   } else {
     hojaPres.insertRowAfter(filaInsercion);
-    hojaPres.getRange(filaInsercion + 1, 1, 1, 7).setValues([filaNueva]);
+    filaDestino = filaInsercion + 1;
+    hojaPres.getRange(filaDestino, 1, 1, 7).setValues([filaNueva]);
   }
+  // Texto plano en la columna Item para que numeros como "9.10" no pierdan
+  // el cero final (Sheets los convertiria en el numero 9.1, chocando con
+  // un item "9.1" real -- el mismo problema que resuelve editar_item).
+  hojaPres.getRange(filaDestino, 3).setNumberFormat("@").setValue(itemNuevo);
+  marcarObraPendiente_(body.obraId);
+
+  return { ok: true };
+}
+
+// Borra un item de la hoja "Presupuesto" de la obra. Por seguridad SOLO
+// permite borrar items sin FilaOrigen (los agregados manualmente desde la
+// app) -- un item que si vino del presupuesto original no se puede borrar
+// aqui, para no perder de vista algo que en realidad esta en el contrato.
+// Las mediciones ya guardadas contra ese item en la hoja "Memoria" NO se
+// borran (evita perder datos por accidente); solo dejan de aparecer en la
+// app y en los reportes porque ya no hay item con el que cruzarlas.
+function borrarItemPresupuesto_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+
+  var direccion = normalizarTexto_(body.direccion);
+  var item = normalizarTexto_(body.item);
+  if (!direccion || !item) return { ok: false, error: "Falta dirección o item" };
+  var descripcionActual = normalizarTexto_(body.descripcionActual);
+
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hojaPres = ss.getSheetByName("Presupuesto");
+  var lastRow = hojaPres.getLastRow();
+  if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
+
+  var valores = hojaPres.getRange(2, 1, lastRow - 1, 7).getValues();
+  var candidatos = [];
+  for (var i = 0; i < valores.length; i++) {
+    if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === item) candidatos.push(i);
+  }
+
+  var indiceElegido = -1;
+  if (candidatos.length === 1) {
+    indiceElegido = candidatos[0];
+  } else if (candidatos.length > 1) {
+    var coincidencias = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
+    if (coincidencias.length === 1) indiceElegido = coincidencias[0];
+  }
+
+  if (indiceElegido === -1) {
+    if (candidatos.length > 1) {
+      return { ok: false, error: "Hay más de un item \"" + item + "\" en esta dirección y no se pudo identificar cuál exactamente. Recarga la app e inténtalo de nuevo." };
+    }
+    return { ok: false, error: "No se encontró ese item en el presupuesto de la obra" };
+  }
+
+  var filaOrigen = valores[indiceElegido][6];
+  if (filaOrigen) {
+    return { ok: false, error: "Este item viene del presupuesto original, así que no se puede eliminar desde la app (solo los agregados manualmente). Usa el lápiz ✏️ si necesitas corregirlo." };
+  }
+
+  hojaPres.deleteRow(indiceElegido + 2);
   marcarObraPendiente_(body.obraId);
 
   return { ok: true };
@@ -744,6 +805,12 @@ function editarItemPresupuesto_(body) {
   var itemNuevo = normalizarTexto_(body.item) || itemViejo;
   var descripcionNueva = body.descripcion != null && normalizarTexto_(body.descripcion) ? normalizarTexto_(body.descripcion) : null;
   var unidadNueva = body.unidad != null ? normalizarTexto_(body.unidad) : null;
+  var cantidadNueva = (body.cantidadPresupuestada !== undefined && body.cantidadPresupuestada !== null && body.cantidadPresupuestada !== "")
+    ? (Number(body.cantidadPresupuestada) || 0) : null;
+  // La descripcion ACTUAL del item que el usuario abrio en la app (no la
+  // nueva) -- sirve para desempatar cuando hay mas de una fila con el mismo
+  // numero de item en la misma direccion (ver comentario mas abajo).
+  var descripcionActual = normalizarTexto_(body.descripcionActual);
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hojaPres = ss.getSheetByName("Presupuesto");
@@ -751,32 +818,69 @@ function editarItemPresupuesto_(body) {
   if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
 
   var valores = hojaPres.getRange(2, 1, lastRow - 1, 7).getValues();
-  var filaEncontrada = -1;
-  var filaOrigen = "";
+
+  // Puede haber mas de una fila con el mismo TEXTO de item en la misma
+  // direccion sin ser un error de captura real: es tipico que un numero
+  // como "7.10" en el presupuesto original quede guardado por Google
+  // Sheets como el numero 7.1 (le recorta el cero final), chocando
+  // visualmente con un "7.1" que si es otro item distinto. Si hay mas de
+  // un candidato, se usa la descripcion ACTUAL (que el frontend ya conoce
+  // porque el usuario abrio ese item especifico, no solo su numero) para
+  // saber con certeza cual de las filas es.
+  var candidatos = [];
   for (var i = 0; i < valores.length; i++) {
     if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === itemViejo) {
-      filaEncontrada = i + 2;
-      filaOrigen = valores[i][6];
-      break;
+      candidatos.push(i);
     }
   }
-  if (filaEncontrada === -1) return { ok: false, error: "No se encontró ese item en el presupuesto de la obra" };
 
-  hojaPres.getRange(filaEncontrada, 3).setValue(itemNuevo);
+  var indiceElegido = -1;
+  if (candidatos.length === 1) {
+    indiceElegido = candidatos[0];
+  } else if (candidatos.length > 1) {
+    var coincidencias = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
+    if (coincidencias.length === 1) indiceElegido = coincidencias[0];
+  }
+
+  if (indiceElegido === -1) {
+    if (candidatos.length > 1) {
+      return {
+        ok: false,
+        error: "Hay " + candidatos.length + " items \"" + itemViejo + "\" en esta dirección y no se pudo identificar cuál exactamente " +
+          "(posiblemente uno de ellos en realidad es otro número, como \"" + itemViejo + "0\", que Google Sheets recorta el cero final). " +
+          "Recarga la app y vuelve a intentarlo; si el problema sigue, avísame.",
+      };
+    }
+    return { ok: false, error: "No se encontró ese item en el presupuesto de la obra" };
+  }
+
+  var filaEncontrada = indiceElegido + 2;
+  var filaOrigen = valores[indiceElegido][6];
+
+  // setNumberFormat("@") ANTES de escribir el numero de item fuerza la
+  // celda a texto plano, para que Sheets no le recorte ceros finales ni lo
+  // convierta en numero (la misma causa del problema de arriba) si el
+  // numero nuevo tambien "parece" numerico.
+  hojaPres.getRange(filaEncontrada, 3).setNumberFormat("@").setValue(itemNuevo);
   if (descripcionNueva !== null) hojaPres.getRange(filaEncontrada, 4).setValue(descripcionNueva);
   if (unidadNueva !== null) hojaPres.getRange(filaEncontrada, 5).setValue(unidadNueva);
+  if (cantidadNueva !== null) hojaPres.getRange(filaEncontrada, 6).setValue(cantidadNueva);
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var lastRowMem = hojaMemoria.getLastRow();
   if (lastRowMem > 1) {
     var valoresMem = hojaMemoria.getRange(2, 1, lastRowMem - 1, 14).getValues();
     for (var j = 0; j < valoresMem.length; j++) {
-      if (normalizarTexto_(valoresMem[j][2]) === direccion && normalizarTexto_(valoresMem[j][3]) === itemViejo) {
-        var filaMem = j + 2;
-        hojaMemoria.getRange(filaMem, 4).setValue(itemNuevo);
-        if (descripcionNueva !== null) hojaMemoria.getRange(filaMem, 5).setValue(descripcionNueva);
-        if (unidadNueva !== null) hojaMemoria.getRange(filaMem, 6).setValue(unidadNueva);
-      }
+      if (normalizarTexto_(valoresMem[j][2]) !== direccion || normalizarTexto_(valoresMem[j][3]) !== itemViejo) continue;
+      // Mismo cuidado que arriba: si el numero de item era ambiguo, solo se
+      // migran las mediciones cuya descripcion coincide con la del item que
+      // se esta editando, para no arrastrar mediciones que en realidad son
+      // del OTRO item con el mismo numero.
+      if (candidatos.length > 1 && normalizarTexto_(valoresMem[j][4]) !== descripcionActual) continue;
+      var filaMem = j + 2;
+      hojaMemoria.getRange(filaMem, 4).setNumberFormat("@").setValue(itemNuevo);
+      if (descripcionNueva !== null) hojaMemoria.getRange(filaMem, 5).setValue(descripcionNueva);
+      if (unidadNueva !== null) hojaMemoria.getRange(filaMem, 6).setValue(unidadNueva);
     }
   }
 
