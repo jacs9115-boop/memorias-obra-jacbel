@@ -1537,11 +1537,16 @@ function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
 // para reconstruirlas con formulas en regenerarEjecucionReal_ -- ver ahi).
 // Basta con que la descripcion CONTENGA alguna de estas frases.
 var ETIQUETAS_CIERRE_OFICIAL_ = [
-  "COSTO DIRECTO OBRA", "TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "UTILIDAD", "COSTO TOTAL OBRA",
+  "COSTO DIRECTO OBRA", "TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "UTILIDAD",
+  "COSTO TOTAL OBRA", "COSTO TOTAL PROYECTO",
 ];
-function esFilaDeCierreOficial_(descripcion) {
-  var d = (descripcion || "").toUpperCase();
-  return ETIQUETAS_CIERRE_OFICIAL_.some(function (e) { return d.indexOf(e) !== -1; });
+// Revisa tanto el item como la descripcion: el archivo oficial no siempre
+// pone la etiqueta de cierre en la misma columna (a veces "COSTO DIRECTO
+// OBRA"/"COSTO TOTAL PROYECTO" quedan en la columna ITEM en vez de
+// DESCRIPCION, lo que antes hacia que esta fila se colara sin filtrar).
+function esFilaDeCierreOficial_(item, descripcion) {
+  var texto = ((item || "") + " " + (descripcion || "")).toUpperCase();
+  return ETIQUETAS_CIERRE_OFICIAL_.some(function (e) { return texto.indexOf(e) !== -1; });
 }
 
 function colLetraEjecucionReal_(n) {
@@ -1679,15 +1684,18 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       // Solo se conservan capitulos/subitems/items reales (nivel 1/2/3).
       // Las filas de cierre que trae el archivo oficial (TOTAL COSTOS
       // DIRECTOS TCD, ADMINISTRACION, IMPREVISTOS, UTILIDAD, COSTO TOTAL
-      // OBRA/COSTO DIRECTO OBRA -- normalmente nivel 4, pero a veces el
-      // archivo las trae con texto en la columna ITEM en vez de vacia, lo
-      // que las clasifica como nivel 2 por error -- y cualquier fila
-      // suelta de subtotal sin etiqueta) se descartan a proposito: se
-      // reemplazan por las 5 de abajo, formuladas. Por eso ademas del
-      // nivel se filtra por texto: si la descripcion es una de estas
-      // etiquetas de cierre conocidas, se descarta aunque haya quedado
-      // mal clasificada.
-      if ((fc.nivel === 1 || fc.nivel === 2 || fc.nivel === 3) && !esFilaDeCierreOficial_(fc.descripcion)) {
+      // OBRA/COSTO DIRECTO OBRA/COSTO TOTAL PROYECTO -- normalmente
+      // nivel 4, pero a veces el archivo las trae con texto en la columna
+      // ITEM en vez de vacia, lo que las clasifica como nivel 2 por error
+      // -- y cualquier fila suelta de subtotal sin etiqueta) se descartan
+      // a proposito: se reemplazan por las 5 de abajo, formuladas. Por eso
+      // ademas del nivel se filtra por texto: si el item o la descripcion
+      // coincide con una etiqueta de cierre conocida, se descarta aunque
+      // haya quedado mal clasificada. Como salvaguarda extra, tambien se
+      // descarta cualquier fila sin item NI descripcion (no puede ser un
+      // item/capitulo real) aunque no matchee ninguna etiqueta.
+      var sinTextoAlguno = !normalizarTexto_(fc.item) && !normalizarTexto_(fc.descripcion);
+      if ((fc.nivel === 1 || fc.nivel === 2 || fc.nivel === 3) && !sinTextoAlguno && !esFilaDeCierreOficial_(fc.item, fc.descripcion)) {
         filasFinal.push(fc);
         var idxFinal = filasFinal.length - 1;
         if (fc.nivel === 1) capRowsIdx.push(idxFinal);
