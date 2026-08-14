@@ -429,14 +429,22 @@ function crearObra_(body) {
   // regenerarEjecucionReal_); solo se usa para items agregados manualmente
   // desde la app, que no estan en ese archivo oficial y por eso necesitan
   // su propio precio si se quiere ver su valor en "Ejecucion Real".
-  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada", "Fila Origen", "VR Unitario"]];
+  // "Origen" (columna 9) es el marcador confiable de "este item lo agrego
+  // el usuario a mano desde el boton + Agregar item nuevo" ("APP") vs
+  // "vino del presupuesto original al crear la obra" (vacio). No basta con
+  // mirar si "Fila Origen" esta vacia para eso: en obras creadas ANTES de
+  // que existiera ese tracking, TODOS los items originales tienen Fila
+  // Origen vacia tambien, y sin esta columna aparte terminaban
+  // confundiendose con items agregados manualmente (ver
+  // regenerarEjecucionReal_ y borrarItemPresupuesto_).
+  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada", "Fila Origen", "VR Unitario", "Origen"]];
   datos.direcciones.forEach(function (d) {
     d.items.forEach(function (it) {
-      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || "", ""]);
+      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || "", "", ""]);
     });
   });
-  hojaPres.getRange(1, 1, filasPres.length, 8).setValues(filasPres);
-  hojaPres.getRange(1, 1, 1, 8).setFontWeight("bold");
+  hojaPres.getRange(1, 1, filasPres.length, 9).setValues(filasPres);
+  hojaPres.getRange(1, 1, 1, 9).setFontWeight("bold");
   hojaPres.setFrozenRows(1);
 
   var hojaMemoria = ss.insertSheet("Memoria");
@@ -492,7 +500,7 @@ function leerObra_(obraId) {
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
-  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 8).getValues() : [];
+  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 9).getValues() : [];
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
@@ -524,7 +532,7 @@ function leerObra_(obraId) {
     direccionesMap[direccion].push({
       capitulo: r[1], item: r[2], descripcion: r[3], unidad: r[4],
       cantidadPresupuestada: r[5], cantidadEjecutada: totales[clave] || 0,
-      filaOrigen: r[6] || "", vrUnitario: r[7] || "",
+      filaOrigen: r[6] || "", vrUnitario: r[7] || "", origen: r[8] || "",
     });
   });
   var direcciones = ordenDirecciones.map(function (nombre) {
@@ -711,7 +719,9 @@ function agregarItemPresupuesto_(body) {
     }
   }
 
-  var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, "", vrUnitario];
+  // "APP" en la columna Origen es lo que despues distingue este item de uno
+  // que vino del presupuesto original (ver nota en crearObra_).
+  var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, "", vrUnitario, "APP"];
   var filaDestino;
   if (filaInsercion === -1) {
     // No habia ningun item de esta direccion todavia (caso raro): se agrega
@@ -721,7 +731,7 @@ function agregarItemPresupuesto_(body) {
   } else {
     hojaPres.insertRowAfter(filaInsercion);
     filaDestino = filaInsercion + 1;
-    hojaPres.getRange(filaDestino, 1, 1, 8).setValues([filaNueva]);
+    hojaPres.getRange(filaDestino, 1, 1, 9).setValues([filaNueva]);
   }
   // Texto plano en la columna Item para que numeros como "9.10" no pierdan
   // el cero final (Sheets los convertiria en el numero 9.1, chocando con
@@ -733,9 +743,14 @@ function agregarItemPresupuesto_(body) {
 }
 
 // Borra un item de la hoja "Presupuesto" de la obra. Por seguridad SOLO
-// permite borrar items sin FilaOrigen (los agregados manualmente desde la
-// app) -- un item que si vino del presupuesto original no se puede borrar
-// aqui, para no perder de vista algo que en realidad esta en el contrato.
+// permite borrar items marcados como Origen="APP" (los agregados
+// manualmente desde el boton + Agregar item nuevo) -- un item que si vino
+// del presupuesto original no se puede borrar aqui, para no perder de
+// vista algo que en realidad esta en el contrato. Ojo: NO basta con mirar
+// si FilaOrigen esta vacia para eso -- en obras creadas antes de que
+// existiera esa columna, TODOS los items originales la tienen vacia
+// tambien, y por eso el chequeo real es la columna Origen (ver nota en
+// crearObra_/agregarItemPresupuesto_).
 // Las mediciones ya guardadas contra ese item en la hoja "Memoria" NO se
 // borran (evita perder datos por accidente); solo dejan de aparecer en la
 // app y en los reportes porque ya no hay item con el que cruzarlas.
@@ -756,7 +771,7 @@ function borrarItemPresupuesto_(body) {
   var lastRow = hojaPres.getLastRow();
   if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
 
-  var valores = hojaPres.getRange(2, 1, lastRow - 1, 7).getValues();
+  var valores = hojaPres.getRange(2, 1, lastRow - 1, 9).getValues();
   var candidatos = [];
   for (var i = 0; i < valores.length; i++) {
     if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === item) candidatos.push(i);
@@ -786,8 +801,8 @@ function borrarItemPresupuesto_(body) {
     return { ok: false, error: "No se encontró ese item en el presupuesto de la obra" };
   }
 
-  var filaOrigen = valores[indiceElegido][6];
-  if (filaOrigen) {
+  var origen = valores[indiceElegido][8];
+  if (origen !== "APP") {
     return { ok: false, error: "Este item viene del presupuesto original, así que no se puede eliminar desde la app (solo los agregados manualmente). Usa el lápiz ✏️ si necesitas corregirlo." };
   }
 
@@ -845,7 +860,7 @@ function editarItemPresupuesto_(body) {
   var lastRow = hojaPres.getLastRow();
   if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
 
-  var valores = hojaPres.getRange(2, 1, lastRow - 1, 8).getValues();
+  var valores = hojaPres.getRange(2, 1, lastRow - 1, 9).getValues();
 
   // Puede haber mas de una fila con el mismo TEXTO de item en la misma
   // direccion sin ser un error de captura real: es tipico que un numero
@@ -1551,21 +1566,26 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   // nuevo") no estan en el archivo oficial con precios -- ese es un
   // documento aparte que el usuario sube a mano, la app nunca lo edita.
   // Para que igual queden reflejados aqui, se agregan en un bloque propio
-  // al final: se buscan en la hoja "Presupuesto" de la obra los items SIN
-  // FilaOrigen (osea que tampoco vinieron del presupuesto original) que no
-  // aparezcan ya en "filas", y se agregan como items nivel 3 normales (con
-  // el mismo cruce automatico contra totalPorItemClave que cualquier otro
-  // item), bajo un encabezado separado -- asi nunca se mezclan con la
-  // estructura ni los totales del archivo oficial, que quedan intactos.
+  // al final: se buscan en la hoja "Presupuesto" de la obra los items con
+  // Origen="APP" (ver nota en crearObra_/agregarItemPresupuesto_ -- OJO,
+  // no basta con mirar si FilaOrigen esta vacia: en obras creadas antes de
+  // que existiera esa columna, TODOS los items originales la tienen vacia
+  // tambien, y por eso el chequeo real y confiable es la columna Origen) y
+  // que ademas no aparezcan ya en "filas" (por si alguna vez coincide con
+  // un item que si esta en el archivo oficial), y se agregan como items
+  // nivel 3 normales (con el mismo cruce automatico contra
+  // totalPorItemClave que cualquier otro item), bajo un encabezado
+  // separado -- asi nunca se mezclan con la estructura ni los totales del
+  // archivo oficial, que quedan intactos.
   var clavesOficiales = {};
   filas.forEach(function (f) { if (f.nivel === 3) clavesOficiales[f.direccion + "||" + f.item] = true; });
 
-  var filasPresCompleta = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 8).getValues() : [];
+  var filasPresCompleta = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 9).getValues() : [];
   var itemsNuevos = [];
   filasPresCompleta.forEach(function (r) {
     var direccionR = normalizarTexto_(r[0]), itemR = normalizarTexto_(r[2]);
     if (!direccionR || !itemR) return;
-    if (r[6]) return; // tiene FilaOrigen: si vino del presupuesto original, no es "nuevo"
+    if (r[8] !== "APP") return; // no fue agregado desde la app: no tocar
     if (clavesOficiales[direccionR + "||" + itemR]) return; // ya esta en el archivo oficial
     itemsNuevos.push({
       direccion: direccionR, item: itemR, descripcion: normalizarTexto_(r[3]), und: normalizarTexto_(r[4]),

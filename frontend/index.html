@@ -652,7 +652,7 @@ function renderItemInfo() {
       </div>
       <button type="button" class="btn-primary" id="btnGuardarEdicionItem">Guardar cambios del item</button>
       <button type="button" class="btn-secondary" id="btnCancelarEdicionItem">Cancelar</button>
-      ${!itemActual.filaOrigen ? '<button type="button" class="btn-secondary" id="btnBorrarItem" style="color:#C0392B">🗑 Eliminar este item (agregado manualmente)</button>' : ""}
+      ${itemActual.origen === "APP" ? '<button type="button" class="btn-secondary" id="btnBorrarItem" style="color:#C0392B">🗑 Eliminar este item (agregado manualmente)</button>' : ""}
     </div>
   `;
   document.getElementById("campoEditarNumero").value = itemActual.item || "";
