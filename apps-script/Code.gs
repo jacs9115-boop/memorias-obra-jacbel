@@ -1643,6 +1643,58 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     }
   });
 
+  // Se reconstruye el cierre de cada direccion (TOTAL COSTOS DIRECTOS TCD /
+  // ADMINISTRACION / IMPREVISTOS / UTILIDAD / COSTO TOTAL OBRA) con
+  // FORMULAS en vez de los valores fijos que trae el archivo oficial -- asi
+  // se recalculan solos si cambia algo (y las tres direcciones quedan
+  // consistentes entre si, incluida la que no traia "COSTO TOTAL OBRA").
+  // Tambien se deja el encabezado de cada direccion (nivel 0) SOLO con el
+  // nombre, sin ningun subtotal en sus columnas.
+  var filasFinal = [];
+  for (var fi = 0; fi < filas.length; fi++) {
+    var fEnc = filas[fi];
+    if (fEnc.nivel !== 0) { filasFinal.push(fEnc); continue; } // no deberia pasar si el archivo esta bien formado, pero por seguridad
+
+    filasFinal.push({ nivel: 0, direccion: fEnc.direccion, item: "", descripcion: fEnc.descripcion, und: "" });
+
+    var finDireccion = filas.length;
+    for (var fj = fi + 1; fj < filas.length; fj++) { if (filas[fj].nivel === 0) { finDireccion = fj; break; } }
+
+    var capRowsIdx = [];
+    var primerItemIdx = -1, ultimoItemIdx = -1;
+    for (var fk = fi + 1; fk < finDireccion; fk++) {
+      var fc = filas[fk];
+      // Solo se conservan capitulos/subitems/items reales (nivel 1/2/3).
+      // Las filas de cierre que trae el archivo oficial (TOTAL COSTOS
+      // DIRECTOS TCD, ADMINISTRACION, IMPREVISTOS, UTILIDAD, COSTO TOTAL
+      // OBRA -- nivel 4 -- y cualquier fila suelta de subtotal sin
+      // etiqueta) se descartan a proposito: se reemplazan por las 5 de
+      // abajo, formuladas.
+      if (fc.nivel === 1 || fc.nivel === 2 || fc.nivel === 3) {
+        filasFinal.push(fc);
+        var idxFinal = filasFinal.length - 1;
+        if (fc.nivel === 1) capRowsIdx.push(idxFinal);
+        if (primerItemIdx === -1) primerItemIdx = idxFinal;
+        ultimoItemIdx = idxFinal;
+      }
+    }
+
+    if (primerItemIdx !== -1) {
+      filasFinal.push({
+        nivel: 10, direccion: fEnc.direccion, item: "", descripcion: "TOTAL COSTOS DIRECTOS TCD", und: "",
+        _capRows: capRowsIdx.length ? capRowsIdx : null,
+        _rangoItems: capRowsIdx.length ? null : [primerItemIdx, ultimoItemIdx],
+      });
+      filasFinal.push({ nivel: 11, direccion: fEnc.direccion, item: "", descripcion: "ADMINISTRACION (30,4% DEL TCD)", und: "" });
+      filasFinal.push({ nivel: 12, direccion: fEnc.direccion, item: "", descripcion: "IMPREVISTOS (1% DEL TCD)", und: "" });
+      filasFinal.push({ nivel: 13, direccion: fEnc.direccion, item: "", descripcion: "UTILIDAD (6% DEL TCD)", und: "" });
+      filasFinal.push({ nivel: 14, direccion: fEnc.direccion, item: "", descripcion: "COSTO TOTAL OBRA", und: "" });
+    }
+
+    fi = finDireccion - 1; // el for exterior le suma 1 al terminar la vuelta
+  }
+  filas = filasFinal;
+
   var NOMBRE_HOJA = "Ejecucion Real";
   var sh = ss.getSheetByName(NOMBRE_HOJA);
   if (sh) ss.deleteSheet(sh);
@@ -1698,14 +1750,22 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   // tamaño normal -- medido: casi 11 segundos). Ahora se arma todo en
   // memoria y se aplica con un puñado de llamadas en bloque.
   //
-  // Las columnas "dinamicas" (PCANT/PVR/TCANT/TVR/SCANT/SVR) mezclan, segun
-  // la fila, un valor plano (la cantidad ejecutada de un item real) o una
-  // formula (sumas de acumulados/saldos) -- por eso van todas por
-  // setFormulas: ahi un string que no empieza con "=" se guarda igual que
-  // si se hubiera tecleado directo en la celda (Sheets lo sigue detectando
-  // como numero), asi no hace falta separar "poner valor" de "poner
-  // formula" celda por celda.
-  var COLS_DINAMICAS = [COL.PCANT, COL.PVR, COL.TCANT, COL.TVR, COL.SCANT, COL.SVR];
+  // Las columnas "dinamicas" mezclan, segun la fila, un valor plano (la
+  // cantidad ejecutada de un item real, o el VR. Parcial que trae el
+  // archivo oficial para items/capitulos) o una formula (sumas de
+  // acumulados/saldos, o los totales de cierre por direccion) -- por eso
+  // van todas por setFormulas: ahi un string que no empieza con "=" se
+  // guarda igual que si se hubiera tecleado directo en la celda (Sheets lo
+  // sigue detectando como numero), asi no hace falta separar "poner valor"
+  // de "poner formula" celda por celda. Incluye VR. PARCIAL (F) y la
+  // columna VR de "Acu Acta Anterior" (H) ademas de las que ya iban
+  // (I..N) -- las 5 filas de cierre de cada direccion (TOTAL COSTOS
+  // DIRECTOS TCD, ADMINISTRACION, IMPREVISTOS, UTILIDAD, COSTO TOTAL
+  // OBRA) las necesitan formuladas tambien ahi, no solo en J/L/N. La
+  // columna G (7, "Acu Acta Anterior" CANT) va incluida solo para que el
+  // rango F:N quede contiguo (un solo setFormulas); nunca se le escribe
+  // nada, siempre queda vacia.
+  var COLS_DINAMICAS = [COL.CVP, COL.ACANT, COL.AVR, COL.PCANT, COL.PVR, COL.TCANT, COL.TVR, COL.SCANT, COL.SVR];
 
   var valoresBase = [];
   var dinamico = [];
@@ -1722,7 +1782,11 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     filaVals[COL.UND - 1] = f.und;
     if (f.cant !== "" && !isNaN(f.cant)) filaVals[COL.CCANT - 1] = f.cant;
     if (f.vrUnit !== "" && !isNaN(f.vrUnit)) filaVals[COL.CVU - 1] = f.vrUnit;
-    if (f.vrParcial !== "" && !isNaN(f.vrParcial)) filaVals[COL.CVP - 1] = f.vrParcial;
+    // OJO: VR. PARCIAL (columna F, CVP) ya NO se pone aqui -- ahora va por
+    // el bloque "dinamico" de mas abajo (junto con el resto de columnas
+    // dinamicas), porque las filas de cierre (nivel 10-14) necesitan una
+    // FORMULA ahi, y F tiene que ir en el mismo rango contiguo/mismo
+    // setFormulas que esas.
     valoresBase.push(filaVals);
 
     var filaDin = {};
@@ -1733,7 +1797,9 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
     if (f.nivel === 0) { bg = "#1F4E78"; color = "#FFFFFF"; peso = "bold"; }
     else if (f.nivel === 1) { bg = "#D9E1F2"; peso = "bold"; }
     else if (f.nivel === 2) { bg = "#FCE4D6"; estilo = "italic"; }
-    else if (f.nivel === 4) { bg = "#F2F2F2"; estilo = "italic"; }
+    else if (f.nivel === 4) { bg = "#F2F2F2"; estilo = "italic"; } // ya no deberia aparecer (se reemplazan por 10-14), se deja por si acaso
+    else if (f.nivel === 10 || f.nivel === 11 || f.nivel === 12 || f.nivel === 13) { bg = "#F2F2F2"; estilo = "italic"; }
+    else if (f.nivel === 14) { bg = "#D9E1F2"; peso = "bold"; }
     backgrounds.push(new Array(14).fill(bg));
     negritas.push(new Array(14).fill(peso));
     coloresTexto.push(new Array(14).fill(color));
@@ -1741,9 +1807,16 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   }
   _t.arraysBase = Date.now();
 
+  var COLS_FORMULA_AIU = [COL.CVP, COL.AVR, COL.PVR, COL.TVR, COL.SVR]; // F, H, J, L, N
+
   for (var idx = 0; idx < numFilas; idx++) {
     var f = filas[idx];
     var row = DATA_START + idx;
+    // VR. PARCIAL (F) por defecto: pasa tal cual el valor que trae el
+    // archivo oficial para items/capitulos (igual que antes, solo que
+    // ahora viaja por este bloque). Las filas de cierre (nivel 10-14) lo
+    // pisan mas abajo con su propia formula.
+    if (f.vrParcial !== "" && !isNaN(f.vrParcial)) dinamico[idx][COL.CVP] = f.vrParcial;
     if (f.nivel === 3) {
       var clave = f.direccion + "||" + f.item;
       var cantEjecutada = totalPorItemClave[clave] || 0;
@@ -1766,19 +1839,38 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
         dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
         dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
       }
-    } else if (f.nivel === 0) {
-      var finRel0 = numFilas;
-      for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel === 0) { finRel0 = j; break; } }
-      var capRows = [];
-      for (var j = idx + 1; j < finRel0; j++) { if (filas[j].nivel === 1) capRows.push(DATA_START + j); }
-      if (capRows.length > 0) {
-        dinamico[idx][COL.PCANT] = "=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PCANT) + r; }).join(",") + ")";
-        dinamico[idx][COL.PVR] = "=SUM(" + capRows.map(function (r) { return colLetraEjecucionReal_(COL.PVR) + r; }).join(",") + ")";
-        dinamico[idx][COL.TCANT] = "=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row;
-        dinamico[idx][COL.TVR] = "=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row;
-        dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
-        dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
-      }
+    } else if (f.nivel === 10) {
+      // TOTAL COSTOS DIRECTOS TCD: suma de los subtotales de cada
+      // capitulo (nivel 1) de la direccion -- igual criterio que antes
+      // usaba el encabezado nivel 0 para PCANT/PVR, aplicado ahora a las
+      // 5 columnas de plata (F/H/J/L/N). Si la direccion no tiene
+      // capitulos (todos sus items van sueltos), se suma directo el
+      // rango de filas de esos items.
+      COLS_FORMULA_AIU.forEach(function (c) {
+        var letra = colLetraEjecucionReal_(c);
+        if (f._capRows) {
+          dinamico[idx][c] = "=SUM(" + f._capRows.map(function (r) { return letra + (DATA_START + r); }).join(",") + ")";
+        } else if (f._rangoItems) {
+          dinamico[idx][c] = "=SUM(" + letra + (DATA_START + f._rangoItems[0]) + ":" + letra + (DATA_START + f._rangoItems[1]) + ")";
+        }
+      });
+    } else if (f.nivel === 11) {
+      // ADMINISTRACION (30,4% DEL TCD): siempre la fila justo arriba
+      // (TOTAL COSTOS DIRECTOS TCD, nivel 10).
+      COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 1) + "*0.304"; });
+    } else if (f.nivel === 12) {
+      // IMPREVISTOS (1% DEL TCD): 2 filas arriba (TOTAL COSTOS DIRECTOS TCD).
+      COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 2) + "*0.01"; });
+    } else if (f.nivel === 13) {
+      // UTILIDAD (6% DEL TCD): 3 filas arriba (TOTAL COSTOS DIRECTOS TCD).
+      COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 3) + "*0.06"; });
+    } else if (f.nivel === 14) {
+      // COSTO TOTAL OBRA: suma de las 4 filas anteriores (TCD +
+      // ADMINISTRACION + IMPREVISTOS + UTILIDAD).
+      COLS_FORMULA_AIU.forEach(function (c) {
+        var letra = colLetraEjecucionReal_(c);
+        dinamico[idx][c] = "=" + letra + (row - 4) + "+" + letra + (row - 3) + "+" + letra + (row - 2) + "+" + letra + (row - 1);
+      });
     }
   }
 
