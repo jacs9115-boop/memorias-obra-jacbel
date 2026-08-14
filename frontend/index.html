@@ -692,10 +692,12 @@ async function guardarEdicionItem() {
       body: JSON.stringify({
         direccion: direccionActual.nombre,
         itemViejo: itemActual.item,
-        // La descripcion ACTUAL (antes de este cambio) se manda aparte para
-        // que el servidor pueda distinguir cual item es, si llegara a haber
-        // dos con el mismo numero en la misma direccion.
+        // La descripcion y cantidad ACTUALES (antes de este cambio) se
+        // mandan aparte para que el servidor pueda distinguir cual item es,
+        // si llegara a haber dos con el mismo numero en la misma direccion
+        // (y hasta la misma descripcion, por el mismo error de captura).
         descripcionActual: itemActual.descripcion,
+        cantidadPresupuestadaActual: itemActual.cantidadPresupuestada,
         item: nuevoItem,
         descripcion: nuevaDescripcion,
         unidad: nuevaUnidad,
@@ -737,6 +739,7 @@ async function borrarItemActual() {
         direccion: direccionActual.nombre,
         item: itemActual.item,
         descripcionActual: itemActual.descripcion,
+        cantidadPresupuestadaActual: itemActual.cantidadPresupuestada,
       }),
     });
     const data = await res.json();

@@ -737,6 +737,9 @@ function borrarItemPresupuesto_(body) {
   var item = normalizarTexto_(body.item);
   if (!direccion || !item) return { ok: false, error: "Falta dirección o item" };
   var descripcionActual = normalizarTexto_(body.descripcionActual);
+  var cantidadActualRaw = body.cantidadPresupuestadaActual;
+  var tieneCantidadActual = cantidadActualRaw !== undefined && cantidadActualRaw !== null && cantidadActualRaw !== "";
+  var cantidadActual = tieneCantidadActual ? Number(cantidadActualRaw) : null;
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hojaPres = ss.getSheetByName("Presupuesto");
@@ -749,12 +752,21 @@ function borrarItemPresupuesto_(body) {
     if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === item) candidatos.push(i);
   }
 
+  // Misma cascada de desempate que editarItemPresupuesto_ (ver ese
+  // comentario): descripcion actual primero, cantidad presupuestada actual
+  // si la descripcion tambien quedo identica.
   var indiceElegido = -1;
   if (candidatos.length === 1) {
     indiceElegido = candidatos[0];
   } else if (candidatos.length > 1) {
-    var coincidencias = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
-    if (coincidencias.length === 1) indiceElegido = coincidencias[0];
+    var porDescripcion = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
+    var restantes = porDescripcion.length ? porDescripcion : candidatos;
+    if (restantes.length === 1) {
+      indiceElegido = restantes[0];
+    } else if (tieneCantidadActual) {
+      var porCantidad = restantes.filter(function (i) { return Number(valores[i][5]) === cantidadActual; });
+      if (porCantidad.length === 1) indiceElegido = porCantidad[0];
+    }
   }
 
   if (indiceElegido === -1) {
@@ -807,10 +819,14 @@ function editarItemPresupuesto_(body) {
   var unidadNueva = body.unidad != null ? normalizarTexto_(body.unidad) : null;
   var cantidadNueva = (body.cantidadPresupuestada !== undefined && body.cantidadPresupuestada !== null && body.cantidadPresupuestada !== "")
     ? (Number(body.cantidadPresupuestada) || 0) : null;
-  // La descripcion ACTUAL del item que el usuario abrio en la app (no la
-  // nueva) -- sirve para desempatar cuando hay mas de una fila con el mismo
-  // numero de item en la misma direccion (ver comentario mas abajo).
+  // La descripcion y cantidad presupuestada ACTUALES del item que el
+  // usuario abrio en la app (no las nuevas) -- sirven para desempatar
+  // cuando hay mas de una fila con el mismo numero de item en la misma
+  // direccion (ver comentario mas abajo).
   var descripcionActual = normalizarTexto_(body.descripcionActual);
+  var cantidadActualRaw = body.cantidadPresupuestadaActual;
+  var tieneCantidadActual = cantidadActualRaw !== undefined && cantidadActualRaw !== null && cantidadActualRaw !== "";
+  var cantidadActual = tieneCantidadActual ? Number(cantidadActualRaw) : null;
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hojaPres = ss.getSheetByName("Presupuesto");
@@ -824,9 +840,12 @@ function editarItemPresupuesto_(body) {
   // como "7.10" en el presupuesto original quede guardado por Google
   // Sheets como el numero 7.1 (le recorta el cero final), chocando
   // visualmente con un "7.1" que si es otro item distinto. Si hay mas de
-  // un candidato, se usa la descripcion ACTUAL (que el frontend ya conoce
-  // porque el usuario abrio ese item especifico, no solo su numero) para
-  // saber con certeza cual de las filas es.
+  // un candidato, se desempata en cascada: primero por la descripcion
+  // ACTUAL (el frontend ya sabe cual abrio el usuario, no solo el numero);
+  // si las descripciones tambien quedaron identicas por el mismo error de
+  // captura (pasa: a veces hasta la descripcion se copio mal en el
+  // presupuesto original), se desempata por la cantidad presupuestada
+  // actual, que casi siempre SI es distinta entre los dos.
   var candidatos = [];
   for (var i = 0; i < valores.length; i++) {
     if (normalizarTexto_(valores[i][0]) === direccion && normalizarTexto_(valores[i][2]) === itemViejo) {
@@ -838,8 +857,14 @@ function editarItemPresupuesto_(body) {
   if (candidatos.length === 1) {
     indiceElegido = candidatos[0];
   } else if (candidatos.length > 1) {
-    var coincidencias = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
-    if (coincidencias.length === 1) indiceElegido = coincidencias[0];
+    var porDescripcion = candidatos.filter(function (i) { return normalizarTexto_(valores[i][3]) === descripcionActual; });
+    var restantes = porDescripcion.length ? porDescripcion : candidatos;
+    if (restantes.length === 1) {
+      indiceElegido = restantes[0];
+    } else if (tieneCantidadActual) {
+      var porCantidad = restantes.filter(function (i) { return Number(valores[i][5]) === cantidadActual; });
+      if (porCantidad.length === 1) indiceElegido = porCantidad[0];
+    }
   }
 
   if (indiceElegido === -1) {
