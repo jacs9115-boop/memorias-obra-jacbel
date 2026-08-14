@@ -181,6 +181,7 @@
         <div class="field"><label>Unidad (ej: M3, M2, ML, UND, DÍAS)</label><input type="text" id="campoNuevoItemUnidad" /></div>
         <div class="field"><label>Cantidad presupuestada</label><input type="number" step="any" id="campoNuevoItemCantidad" /></div>
         <div class="field"><label>Capítulo (opcional, para agruparlo)</label><input type="text" id="campoNuevoItemCapitulo" placeholder="Ej: Adición 1" /></div>
+        <div class="field"><label>Valor unitario (opcional, para que aparezca con precio en "Ejecución Real")</label><input type="number" step="any" id="campoNuevoItemVrUnitario" /></div>
         <button type="button" class="btn-primary" id="btnGuardarNuevoItem">Guardar item nuevo</button>
         <button type="button" class="btn-secondary" id="btnCancelarNuevoItem">Cancelar</button>
       </div>
@@ -543,7 +544,7 @@ document.getElementById("btnMostrarAgregarItem").addEventListener("click", () =>
     form.style.display = "none";
     return;
   }
-  ["campoNuevoItemNumero", "campoNuevoItemDescripcion", "campoNuevoItemUnidad", "campoNuevoItemCantidad", "campoNuevoItemCapitulo"]
+  ["campoNuevoItemNumero", "campoNuevoItemDescripcion", "campoNuevoItemUnidad", "campoNuevoItemCantidad", "campoNuevoItemCapitulo", "campoNuevoItemVrUnitario"]
     .forEach((id) => { document.getElementById(id).value = ""; });
   form.style.display = "block";
 });
@@ -566,6 +567,7 @@ document.getElementById("btnGuardarNuevoItem").addEventListener("click", async (
   const unidad = document.getElementById("campoNuevoItemUnidad").value.trim();
   const cantidadPresupuestada = document.getElementById("campoNuevoItemCantidad").value.trim();
   const capitulo = document.getElementById("campoNuevoItemCapitulo").value.trim();
+  const vrUnitario = document.getElementById("campoNuevoItemVrUnitario").value.trim();
   if (!numero) { mostrarToast("Ponle un número al item", true); return; }
 
   const btn = document.getElementById("btnGuardarNuevoItem");
@@ -576,7 +578,7 @@ document.getElementById("btnGuardarNuevoItem").addEventListener("click", async (
     const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/items`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        direccion: direccionActual.nombre, item: numero, descripcion, unidad, cantidadPresupuestada, capitulo,
+        direccion: direccionActual.nombre, item: numero, descripcion, unidad, cantidadPresupuestada, capitulo, vrUnitario,
       }),
     });
     const data = await res.json();
@@ -644,6 +646,7 @@ function renderItemInfo() {
       <div class="field"><label>Descripción</label><input type="text" id="campoEditarDescripcion" /></div>
       <div class="field"><label>Unidad (ej: M3, M2, ML, UND, DÍAS)</label><input type="text" id="campoEditarUnidad" /></div>
       <div class="field"><label>Cantidad presupuestada</label><input type="number" step="any" id="campoEditarCantidad" /></div>
+      <div class="field"><label>Valor unitario (opcional, para que aparezca con precio en "Ejecución Real")</label><input type="number" step="any" id="campoEditarVrUnitario" /></div>
       <div class="empty" style="padding:0 0 10px;font-size:11.5px;text-align:left">
         Corrige aquí si el item quedó mal capturado al leer el presupuesto (por ejemplo, sin unidad). El cambio queda en esta obra y, si es posible, también se actualiza el archivo de presupuesto original en Drive.
       </div>
@@ -656,6 +659,7 @@ function renderItemInfo() {
   document.getElementById("campoEditarDescripcion").value = itemActual.descripcion || "";
   document.getElementById("campoEditarUnidad").value = itemActual.unidad || "";
   document.getElementById("campoEditarCantidad").value = itemActual.cantidadPresupuestada || "";
+  document.getElementById("campoEditarVrUnitario").value = itemActual.vrUnitario || "";
 }
 
 // Delegacion de eventos sobre el contenedor: renderItemInfo() reemplaza su
@@ -681,6 +685,7 @@ async function guardarEdicionItem() {
   const nuevaDescripcion = document.getElementById("campoEditarDescripcion").value.trim();
   const nuevaUnidad = document.getElementById("campoEditarUnidad").value.trim();
   const nuevaCantidad = document.getElementById("campoEditarCantidad").value.trim();
+  const nuevoVrUnitario = document.getElementById("campoEditarVrUnitario").value.trim();
   if (!nuevoItem) { mostrarToast("El número de item no puede quedar vacío", true); return; }
 
   const btn = document.getElementById("btnGuardarEdicionItem");
@@ -702,6 +707,7 @@ async function guardarEdicionItem() {
         descripcion: nuevaDescripcion,
         unidad: nuevaUnidad,
         cantidadPresupuestada: nuevaCantidad,
+        vrUnitario: nuevoVrUnitario,
       }),
     });
     const data = await res.json();

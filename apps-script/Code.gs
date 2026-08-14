@@ -423,15 +423,20 @@ function crearObra_(body) {
   // La columna "Fila Origen" (numero de fila dentro del archivo original en
   // Drive) es lo que permite despues editar un item desde la app y que el
   // cambio se escriba tambien en ese archivo original, sin tener que
-  // adivinar cual fila es por texto (ver editarItemPresupuesto_).
-  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada", "Fila Origen"]];
+  // adivinar cual fila es por texto (ver editarItemPresupuesto_). "VR
+  // Unitario" normalmente queda vacia para los items del presupuesto
+  // original (su precio vive en el archivo oficial aparte, ver
+  // regenerarEjecucionReal_); solo se usa para items agregados manualmente
+  // desde la app, que no estan en ese archivo oficial y por eso necesitan
+  // su propio precio si se quiere ver su valor en "Ejecucion Real".
+  var filasPres = [["Dirección", "Capítulo", "Item", "Descripción", "Unidad", "Cantidad Presupuestada", "Fila Origen", "VR Unitario"]];
   datos.direcciones.forEach(function (d) {
     d.items.forEach(function (it) {
-      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || ""]);
+      filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || "", ""]);
     });
   });
-  hojaPres.getRange(1, 1, filasPres.length, 7).setValues(filasPres);
-  hojaPres.getRange(1, 1, 1, 7).setFontWeight("bold");
+  hojaPres.getRange(1, 1, filasPres.length, 8).setValues(filasPres);
+  hojaPres.getRange(1, 1, 1, 8).setFontWeight("bold");
   hojaPres.setFrozenRows(1);
 
   var hojaMemoria = ss.insertSheet("Memoria");
@@ -487,7 +492,7 @@ function leerObra_(obraId) {
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
-  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 7).getValues() : [];
+  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 8).getValues() : [];
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var ultimaFilaMemoria = hojaMemoria.getLastRow();
@@ -519,7 +524,7 @@ function leerObra_(obraId) {
     direccionesMap[direccion].push({
       capitulo: r[1], item: r[2], descripcion: r[3], unidad: r[4],
       cantidadPresupuestada: r[5], cantidadEjecutada: totales[clave] || 0,
-      filaOrigen: r[6] || "",
+      filaOrigen: r[6] || "", vrUnitario: r[7] || "",
     });
   });
   var direcciones = ordenDirecciones.map(function (nombre) {
@@ -678,6 +683,11 @@ function agregarItemPresupuesto_(body) {
   var capitulo = normalizarTexto_(body.capitulo) || "Agregado manualmente";
   var cantidadPresupuestada = (body.cantidadPresupuestada !== "" && body.cantidadPresupuestada != null)
     ? (Number(body.cantidadPresupuestada) || 0) : 0;
+  // Opcional: si se da un precio unitario, este item puede aparecer con
+  // valor en "Ejecucion Real" ademas de solo la cantidad (ver
+  // regenerarEjecucionReal_). Si se deja vacio, igual aparece ahi, solo que
+  // sin columnas de valor.
+  var vrUnitario = (body.vrUnitario !== "" && body.vrUnitario != null) ? (Number(body.vrUnitario) || "") : "";
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hojaPres = ss.getSheetByName("Presupuesto");
@@ -701,7 +711,7 @@ function agregarItemPresupuesto_(body) {
     }
   }
 
-  var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, ""];
+  var filaNueva = [direccion, capitulo, itemNuevo, descripcion, unidad, cantidadPresupuestada, "", vrUnitario];
   var filaDestino;
   if (filaInsercion === -1) {
     // No habia ningun item de esta direccion todavia (caso raro): se agrega
@@ -711,7 +721,7 @@ function agregarItemPresupuesto_(body) {
   } else {
     hojaPres.insertRowAfter(filaInsercion);
     filaDestino = filaInsercion + 1;
-    hojaPres.getRange(filaDestino, 1, 1, 7).setValues([filaNueva]);
+    hojaPres.getRange(filaDestino, 1, 1, 8).setValues([filaNueva]);
   }
   // Texto plano en la columna Item para que numeros como "9.10" no pierdan
   // el cero final (Sheets los convertiria en el numero 9.1, chocando con
@@ -819,6 +829,8 @@ function editarItemPresupuesto_(body) {
   var unidadNueva = body.unidad != null ? normalizarTexto_(body.unidad) : null;
   var cantidadNueva = (body.cantidadPresupuestada !== undefined && body.cantidadPresupuestada !== null && body.cantidadPresupuestada !== "")
     ? (Number(body.cantidadPresupuestada) || 0) : null;
+  var vrUnitarioNuevo = (body.vrUnitario !== undefined && body.vrUnitario !== null && body.vrUnitario !== "")
+    ? (Number(body.vrUnitario) || 0) : null;
   // La descripcion y cantidad presupuestada ACTUALES del item que el
   // usuario abrio en la app (no las nuevas) -- sirven para desempatar
   // cuando hay mas de una fila con el mismo numero de item en la misma
@@ -833,7 +845,7 @@ function editarItemPresupuesto_(body) {
   var lastRow = hojaPres.getLastRow();
   if (lastRow < 2) return { ok: false, error: "Este presupuesto no tiene items" };
 
-  var valores = hojaPres.getRange(2, 1, lastRow - 1, 7).getValues();
+  var valores = hojaPres.getRange(2, 1, lastRow - 1, 8).getValues();
 
   // Puede haber mas de una fila con el mismo TEXTO de item en la misma
   // direccion sin ser un error de captura real: es tipico que un numero
@@ -890,6 +902,7 @@ function editarItemPresupuesto_(body) {
   if (descripcionNueva !== null) hojaPres.getRange(filaEncontrada, 4).setValue(descripcionNueva);
   if (unidadNueva !== null) hojaPres.getRange(filaEncontrada, 5).setValue(unidadNueva);
   if (cantidadNueva !== null) hojaPres.getRange(filaEncontrada, 6).setValue(cantidadNueva);
+  if (vrUnitarioNuevo !== null) hojaPres.getRange(filaEncontrada, 8).setValue(vrUnitarioNuevo);
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var lastRowMem = hojaMemoria.getLastRow();
@@ -1533,6 +1546,49 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
 
   var filas = leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas);
   _t.leerPresupuestoOficial = Date.now();
+
+  // Los items agregados manualmente desde la app (boton "+ Agregar item
+  // nuevo") no estan en el archivo oficial con precios -- ese es un
+  // documento aparte que el usuario sube a mano, la app nunca lo edita.
+  // Para que igual queden reflejados aqui, se agregan en un bloque propio
+  // al final: se buscan en la hoja "Presupuesto" de la obra los items SIN
+  // FilaOrigen (osea que tampoco vinieron del presupuesto original) que no
+  // aparezcan ya en "filas", y se agregan como items nivel 3 normales (con
+  // el mismo cruce automatico contra totalPorItemClave que cualquier otro
+  // item), bajo un encabezado separado -- asi nunca se mezclan con la
+  // estructura ni los totales del archivo oficial, que quedan intactos.
+  var clavesOficiales = {};
+  filas.forEach(function (f) { if (f.nivel === 3) clavesOficiales[f.direccion + "||" + f.item] = true; });
+
+  var filasPresCompleta = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 8).getValues() : [];
+  var itemsNuevos = [];
+  filasPresCompleta.forEach(function (r) {
+    var direccionR = normalizarTexto_(r[0]), itemR = normalizarTexto_(r[2]);
+    if (!direccionR || !itemR) return;
+    if (r[6]) return; // tiene FilaOrigen: si vino del presupuesto original, no es "nuevo"
+    if (clavesOficiales[direccionR + "||" + itemR]) return; // ya esta en el archivo oficial
+    itemsNuevos.push({
+      direccion: direccionR, item: itemR, descripcion: normalizarTexto_(r[3]), und: normalizarTexto_(r[4]),
+      vrUnit: (r[7] === "" || r[7] == null) ? "" : Number(r[7]),
+    });
+  });
+
+  if (itemsNuevos.length) {
+    // nivel 0 reutiliza el estilo de encabezado de direccion (fondo azul
+    // oscuro); al no tener capitulos (nivel 1) dentro de su rango, el
+    // codigo de mas abajo simplemente no le calcula ninguna suma (capRows
+    // queda vacio), asi que es seguro reusarlo solo como separador visual.
+    filas.push({
+      nivel: 0, direccion: "", item: "", descripcion: "ITEMS AGREGADOS DESDE LA APP (sin precio en el presupuesto oficial)",
+      und: "", cant: "", vrUnit: "", vrParcial: "",
+    });
+    itemsNuevos.forEach(function (n) {
+      filas.push({
+        nivel: 3, direccion: n.direccion, item: n.item, descripcion: n.direccion + " — " + n.descripcion, und: n.und,
+        cant: "", vrUnit: n.vrUnit, vrParcial: "", // "cant"/"vrParcial" (CONTRATADO) vacios: no fueron parte del contrato original
+      });
+    });
+  }
 
   var NOMBRE_HOJA = "Ejecucion Real";
   var sh = ss.getSheetByName(NOMBRE_HOJA);
