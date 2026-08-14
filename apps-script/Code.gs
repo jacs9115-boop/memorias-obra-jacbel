@@ -846,6 +846,13 @@ function editarItemPresupuesto_(body) {
     ? (Number(body.cantidadPresupuestada) || 0) : null;
   var vrUnitarioNuevo = (body.vrUnitario !== undefined && body.vrUnitario !== null && body.vrUnitario !== "")
     ? (Number(body.vrUnitario) || 0) : null;
+  // Solo para corregir items viejos agregados desde la app ANTES de que
+  // existiera la columna Origen (por eso quedaron sin el marcador "APP" y
+  // no se reconocen en regenerarEjecucionReal_/borrarItemPresupuesto_):
+  // permite ponerles el marcador ahora, sin tener que borrarlos y
+  // volverlos a crear. Solo acepta "APP" a proposito (no sirve para
+  // ocultar un item real como si fuera agregado).
+  var origenNuevo = (body.origen === "APP") ? "APP" : null;
   // La descripcion y cantidad presupuestada ACTUALES del item que el
   // usuario abrio en la app (no las nuevas) -- sirven para desempatar
   // cuando hay mas de una fila con el mismo numero de item en la misma
@@ -918,6 +925,7 @@ function editarItemPresupuesto_(body) {
   if (unidadNueva !== null) hojaPres.getRange(filaEncontrada, 5).setValue(unidadNueva);
   if (cantidadNueva !== null) hojaPres.getRange(filaEncontrada, 6).setValue(cantidadNueva);
   if (vrUnitarioNuevo !== null) hojaPres.getRange(filaEncontrada, 8).setValue(vrUnitarioNuevo);
+  if (origenNuevo !== null) hojaPres.getRange(filaEncontrada, 9).setValue(origenNuevo);
 
   var hojaMemoria = ss.getSheetByName("Memoria");
   var lastRowMem = hojaMemoria.getLastRow();
