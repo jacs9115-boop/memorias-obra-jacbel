@@ -1663,6 +1663,7 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   // Tambien se deja el encabezado de cada direccion (nivel 0) SOLO con el
   // nombre, sin ningun subtotal en sus columnas.
   var filasFinal = [];
+  var tcdRowsIdx = []; // indice (en filasFinal) del TCD de cada direccion, para el resumen general de mas abajo
   for (var fi = 0; fi < filas.length; fi++) {
     var fEnc = filas[fi];
     if (fEnc.nivel !== 0) { filasFinal.push(fEnc); continue; } // no deberia pasar si el archivo esta bien formado, pero por seguridad
@@ -1702,6 +1703,7 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
         _capRows: capRowsIdx.length ? capRowsIdx : null,
         _rangoItems: capRowsIdx.length ? null : [primerItemIdx, ultimoItemIdx],
       });
+      tcdRowsIdx.push(filasFinal.length - 1);
       filasFinal.push({ nivel: 11, direccion: fEnc.direccion, item: "", descripcion: "ADMINISTRACION (30,4% DEL TCD)", und: "" });
       filasFinal.push({ nivel: 12, direccion: fEnc.direccion, item: "", descripcion: "IMPREVISTOS (1% DEL TCD)", und: "" });
       filasFinal.push({ nivel: 13, direccion: fEnc.direccion, item: "", descripcion: "UTILIDAD (6% DEL TCD)", und: "" });
@@ -1710,6 +1712,25 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
 
     fi = finDireccion - 1; // el for exterior le suma 1 al terminar la vuelta
   }
+
+  // Resumen general al final de toda la hoja: mismo patron de 5 filas
+  // (TOTAL COSTOS DIRECTOS TCD / ADMINISTRACION / IMPREVISTOS / UTILIDAD /
+  // COSTO TOTAL OBRA), pero el TCD de aca suma el TCD de CADA direccion en
+  // vez de los capitulos de una sola -- se reutiliza tal cual la misma
+  // logica de formulas (nivel 10-14 se procesan igual sin importar si
+  // "_capRows" apunta a capitulos o a los TCD de cada direccion).
+  if (tcdRowsIdx.length) {
+    filasFinal.push({ nivel: 0, direccion: "", item: "", descripcion: "RESUMEN GENERAL DE LA OBRA", und: "" });
+    filasFinal.push({
+      nivel: 10, direccion: "", item: "", descripcion: "TOTAL COSTOS DIRECTOS TCD", und: "",
+      _capRows: tcdRowsIdx, _rangoItems: null,
+    });
+    filasFinal.push({ nivel: 11, direccion: "", item: "", descripcion: "ADMINISTRACION (30,4% DEL TCD)", und: "" });
+    filasFinal.push({ nivel: 12, direccion: "", item: "", descripcion: "IMPREVISTOS (1% DEL TCD)", und: "" });
+    filasFinal.push({ nivel: 13, direccion: "", item: "", descripcion: "UTILIDAD (6% DEL TCD)", und: "" });
+    filasFinal.push({ nivel: 14, direccion: "", item: "", descripcion: "COSTO TOTAL OBRA", und: "" });
+  }
+
   filas = filasFinal;
 
   var NOMBRE_HOJA = "Ejecucion Real";
