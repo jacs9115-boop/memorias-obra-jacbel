@@ -8,7 +8,10 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "15mb" }));
+// 25mb: los adjuntos del Informe de Supervision (PDFs escaneados de polizas
+// o del contrato) pueden pesar varios MB, y viajan como base64 dentro del
+// JSON (~33% mas pesado que el archivo original).
+app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 function requireAppsScriptUrl() {
@@ -196,6 +199,44 @@ app.delete("/api/medidas/:medidaId", async (req, res) => {
     const { obraId } = req.body;
     if (!obraId) return res.status(400).json({ error: "Falta obraId" });
     const data = await llamarAppsScriptPost({ accion: "borrar_medida", medidaId: req.params.medidaId, obraId });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// ---------- Informe de Supervision (AP2-FO-024) ----------
+
+app.get("/api/obras/:obraId/informe-supervision", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScript(`${APPS_SCRIPT_URL}?informeSupervision=${encodeURIComponent(req.params.obraId)}`);
+    if (data && data.error) return res.status(400).json({ error: data.error });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+app.put("/api/obras/:obraId/informe-supervision", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScriptPost({ accion: "guardar_datos_informe", obraId: req.params.obraId, ...req.body });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+app.post("/api/obras/:obraId/informe-supervision/documentos", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const { tipo, base64 } = req.body;
+    if (!tipo || !base64) return res.status(400).json({ error: "Falta tipo o base64 del archivo" });
+    const data = await llamarAppsScriptPost({ accion: "subir_documento_informe", obraId: req.params.obraId, ...req.body });
     res.json(data);
   } catch (err) {
     console.error(err);

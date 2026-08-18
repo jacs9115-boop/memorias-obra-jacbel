@@ -8,6 +8,7 @@ function doGet(e) {
     if (e.parameter.presupuestos === "1") return jsonOutput_(listarPresupuestos_());
     if (e.parameter.previsualizar) return jsonOutput_(parsearPresupuesto_(e.parameter.previsualizar));
     if (e.parameter.obra) return jsonOutput_(leerObra_(e.parameter.obra));
+    if (e.parameter.informeSupervision) return jsonOutput_(obtenerDatosInforme_(e.parameter.informeSupervision));
     return jsonOutput_({ error: "Parametro no reconocido" });
   } catch (err) {
     return jsonOutput_({ error: String(err) });
@@ -27,6 +28,8 @@ function doPost(e) {
     if (body.accion === "agregar_item") return jsonOutput_(agregarItemPresupuesto_(body));
     if (body.accion === "borrar_item") return jsonOutput_(borrarItemPresupuesto_(body));
     if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
+    if (body.accion === "guardar_datos_informe") return jsonOutput_(guardarDatosInforme_(body));
+    if (body.accion === "subir_documento_informe") return jsonOutput_(subirDocumentoInforme_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -57,6 +60,13 @@ function carpetaRaiz_() { return obtenerCarpetaId_("carpetaRaiz", "Memorias JACB
 function carpetaPresupuestos_() { return obtenerCarpetaId_("carpetaPresupuestos", "Presupuestos", carpetaRaiz_()); }
 function carpetaFotos_() { return obtenerCarpetaId_("carpetaFotos", "Fotos", carpetaRaiz_()); }
 function carpetaObras_() { return obtenerCarpetaId_("carpetaObras", "Obras (hojas)", carpetaRaiz_()); }
+// A diferencia de las fotos de medicion (todas juntas en "Fotos"), los
+// adjuntos del Informe de Supervision (Acta de Inicio, polizas, contrato,
+// comprobante de anticipo) son documentos legales que hay que poder ubicar
+// por obra -- por eso van en una subcarpeta PROPIA de cada obra, dentro de
+// una carpeta raiz aparte.
+function carpetaInformesRaiz_() { return obtenerCarpetaId_("carpetaInformesRaiz", "Informes Supervision", carpetaRaiz_()); }
+function carpetaInformesObra_(obraId) { return obtenerCarpetaId_("carpetaInformeObra_" + obraId, obraId, carpetaInformesRaiz_()); }
 
 // ---------- Listar y previsualizar presupuestos desde Drive ----------
 
@@ -387,6 +397,158 @@ function actualizarReportesPendientes_() {
       marcarObraPendiente_(obraId); // reintenta en la siguiente pasada del disparador
     }
   });
+}
+
+// ---------- Informe de Supervision (AP2-FO-024): datos manuales + adjuntos ----------
+//
+// A diferencia del resto de la obra (que se lee del presupuesto/las
+// mediciones), estos datos NO existen en ningun lado dentro de la app: son
+// los que normalmente salen del Acta de Inicio, las polizas y el contrato.
+// Se ingresan una sola vez a mano y quedan guardados en la propia hoja de
+// la obra (hoja "InformeSupervision", clave/valor, y hoja "Amparos", tabla)
+// para reusarlos en cada informe parcial futuro sin volver a digitarlos.
+// Los archivos adjuntos (Acta, polizas, contrato, comprobante de anticipo)
+// son solo de referencia/respaldo -- no se leen ni procesan (sin OCR), solo
+// se guardan en Drive y su URL queda como un campo mas del informe.
+
+var CAMPOS_INFORME_SUPERVISION_ = [
+  "numeroContrato", "objeto", "contratista", "valorInicial", "plazo",
+  "fechaActaInicio", "fechaTerminacionInicial", "nuevaFechaTerminacion",
+  "polizaCumplimiento", "polizaResponsabilidadCivil", "companiaAseguradora",
+  "porcentajeAnticipo", "valorAnticipo",
+  "urlActaInicio", "urlPolizas", "urlContrato", "urlComprobanteAnticipo",
+];
+
+function hojaInformeSupervision_(ss) {
+  var hoja = ss.getSheetByName("InformeSupervision");
+  if (!hoja) {
+    hoja = ss.insertSheet("InformeSupervision");
+    hoja.getRange(1, 1, 1, 2).setValues([["Campo", "Valor"]]).setFontWeight("bold");
+    hoja.setColumnWidth(1, 220);
+    hoja.setColumnWidth(2, 420);
+    hoja.setFrozenRows(1);
+  }
+  return hoja;
+}
+
+function hojaAmparos_(ss) {
+  var hoja = ss.getSheetByName("Amparos");
+  if (!hoja) {
+    hoja = ss.insertSheet("Amparos");
+    hoja.getRange(1, 1, 1, 5).setValues([["Tipo", "Porcentaje", "Valor Asegurado", "Vigencia Desde", "Vigencia Hasta"]]).setFontWeight("bold");
+    hoja.setFrozenRows(1);
+  }
+  return hoja;
+}
+
+function leerCamposInforme_(ss) {
+  var hoja = hojaInformeSupervision_(ss);
+  var lastRow = hoja.getLastRow();
+  var datos = {};
+  if (lastRow > 1) {
+    hoja.getRange(2, 1, lastRow - 1, 2).getValues().forEach(function (r) {
+      if (r[0]) datos[r[0]] = r[1];
+    });
+  }
+  return datos;
+}
+
+function leerAmparos_(ss) {
+  var hoja = hojaAmparos_(ss);
+  var lastRow = hoja.getLastRow();
+  if (lastRow < 2) return [];
+  return hoja.getRange(2, 1, lastRow - 1, 5).getValues()
+    .filter(function (r) { return r.some(function (v) { return v !== ""; }); })
+    .map(function (r) {
+      return { tipo: r[0], porcentaje: r[1], valorAsegurado: r[2], vigenciaDesde: r[3], vigenciaHasta: r[4] };
+    });
+}
+
+// Actualiza SOLO los campos que vienen en "camposParciales" (los demas
+// quedan tal cual estaban) -- asi subirDocumentoInforme_ puede actualizar
+// nada mas su propia URL sin tener que reenviar todo el formulario.
+function upsertCamposInforme_(ss, camposParciales) {
+  var actuales = leerCamposInforme_(ss);
+  Object.keys(camposParciales || {}).forEach(function (k) {
+    actuales[k] = camposParciales[k];
+  });
+  var hoja = hojaInformeSupervision_(ss);
+  var lastRow = hoja.getLastRow();
+  if (lastRow > 1) hoja.getRange(2, 1, lastRow - 1, 2).clearContent();
+  // Se escribe siempre en el mismo orden (CAMPOS_INFORME_SUPERVISION_) para
+  // que la hoja quede prolija si alguien la abre directo en Sheets;
+  // cualquier clave vieja/desconocida se agrega al final para no perderla.
+  var claves = CAMPOS_INFORME_SUPERVISION_.slice();
+  Object.keys(actuales).forEach(function (k) { if (claves.indexOf(k) === -1) claves.push(k); });
+  var filas = claves
+    .filter(function (k) { return actuales[k] !== undefined && actuales[k] !== ""; })
+    .map(function (k) { return [k, actuales[k]]; });
+  if (filas.length) hoja.getRange(2, 1, filas.length, 2).setValues(filas);
+  return actuales;
+}
+
+function guardarAmparos_(ss, amparos) {
+  var hoja = hojaAmparos_(ss);
+  var lastRow = hoja.getLastRow();
+  if (lastRow > 1) hoja.getRange(2, 1, lastRow - 1, 5).clearContent();
+  var filas = (amparos || [])
+    .filter(function (a) { return a && (a.tipo || a.valorAsegurado); })
+    .map(function (a) { return [a.tipo || "", a.porcentaje || "", a.valorAsegurado || "", a.vigenciaDesde || "", a.vigenciaHasta || ""]; });
+  if (filas.length) hoja.getRange(2, 1, filas.length, 5).setValues(filas);
+}
+
+function guardarDatosInforme_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var datos = upsertCamposInforme_(ss, body.datos || {});
+  if (body.amparos) guardarAmparos_(ss, body.amparos);
+  return { ok: true, datos: datos, amparos: leerAmparos_(ss) };
+}
+
+function obtenerDatosInforme_(obraId) {
+  var obra = buscarObra_(obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  return { ok: true, datos: leerCamposInforme_(ss), amparos: leerAmparos_(ss) };
+}
+
+// A que campo de InformeSupervision corresponde la URL de cada tipo de
+// adjunto, para que subirDocumentoInforme_ la guarde sola sin tener que
+// reenviar el resto del formulario.
+var TIPO_A_CAMPO_DOCUMENTO_ = {
+  acta_inicio: "urlActaInicio",
+  polizas: "urlPolizas",
+  contrato: "urlContrato",
+  comprobante_anticipo: "urlComprobanteAnticipo",
+};
+
+function subirDocumentoInforme_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var campo = TIPO_A_CAMPO_DOCUMENTO_[body.tipo];
+  if (!campo) return { ok: false, error: "Tipo de documento no reconocido: " + body.tipo };
+  var b64 = base64Valido_(body.base64);
+  if (!b64) return { ok: false, error: "El archivo llegó incompleto o dañado, intenta adjuntarlo de nuevo" };
+  try {
+    var esPdf = (body.mime || "").indexOf("pdf") !== -1;
+    var blob = Utilities.newBlob(
+      Utilities.base64Decode(b64),
+      body.mime || "application/pdf",
+      body.nombre || (body.tipo + (esPdf ? ".pdf" : ".jpg"))
+    );
+    var carpeta = DriveApp.getFolderById(carpetaInformesObra_(body.obraId));
+    var archivo = carpeta.createFile(blob);
+    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = archivo.getUrl();
+    var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+    var camposActualizados = {};
+    camposActualizados[campo] = url;
+    upsertCamposInforme_(ss, camposActualizados);
+    return { ok: true, url: url, campo: campo };
+  } catch (err) {
+    return { ok: false, error: "No se pudo subir el archivo: " + err };
+  }
 }
 
 // ---------- Crear una obra nueva a partir de un presupuesto ----------
