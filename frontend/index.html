@@ -164,9 +164,9 @@
       <button type="button" class="btn-primary" id="btnActualizarReportes">🔄 Actualizar reportes</button>
     </div>
     <div class="card">
-      <h2>Informe de Supervisión</h2>
+      <h2>Informe del Contratista</h2>
       <div class="empty" style="padding:0 0 10px;font-size:12.5px">Formato AP2-FO-024 de ACUAVALLE.</div>
-      <button type="button" class="btn-secondary" id="btnGenerarInforme">📋 Generar Informe de Supervisión</button>
+      <button type="button" class="btn-secondary" id="btnGenerarInforme">📋 Generar Informe del Contratista</button>
     </div>
     <div style="margin-top:36px;padding-top:16px;border-top:1px solid var(--border);text-align:center">
       <button type="button" id="btnBorrarObra" style="background:none;border:none;color:var(--muted);font-size:12.5px;padding:10px">Eliminar esta obra</button>
@@ -237,9 +237,9 @@
 
   <div class="vista" id="vistaInformeSupervision" style="display:none">
     <div class="card">
-      <h2>Adjuntos de referencia</h2>
+      <h2>Adjuntos</h2>
       <div class="empty" style="padding:0 0 10px;font-size:12.5px;text-align:left">
-        Estos archivos son solo de respaldo/consulta -- no se leen automáticamente. Cópialos al formulario de abajo.
+        Al adjuntar cada archivo, la IA lo lee e intenta llenar sola los campos de abajo que le correspondan. Siempre revisa y corrige lo que haga falta antes de guardar.
       </div>
       <div class="field-adjunto" data-tipo="acta_inicio" style="margin-bottom:14px">
         <label style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px">Acta de Inicio</label>
@@ -1370,7 +1370,7 @@ let amparosActuales = [];
 
 function abrirInformeSupervision() {
   if (!obraActual) return;
-  navegarA("vistaInformeSupervision", "Informe de Supervisión");
+  navegarA("vistaInformeSupervision", "Informe del Contratista");
   cargarInformeSupervision();
 }
 document.getElementById("btnGenerarInforme").addEventListener("click", abrirInformeSupervision);
@@ -1475,20 +1475,41 @@ document.getElementById("listaAmparos").addEventListener("click", (e) => {
   renderAmparos();
 });
 
-function archivoABase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
-    reader.readAsDataURL(file);
-  });
-}
-
 document.querySelectorAll(".btnSeleccionarAdjunto").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelector(`.inputAdjuntoInforme[data-tipo="${btn.dataset.tipo}"]`).click();
   });
 });
+
+// Vuelca en el formulario (y, si es de polizas, en la tabla de amparos) lo
+// que la IA haya logrado leer del documento. Solo llena los campos que la
+// IA SI devolvio (no borra nada si un campo vino vacio) -- de ahi en
+// adelante queda igual que si se hubiera escrito a mano: editable y sin
+// guardar hasta presionar "Guardar datos del informe".
+function aplicarDatosExtraidos_(extraido) {
+  if (!extraido) return;
+  let camposLlenados = 0;
+  Object.keys(CAMPO_A_INPUT_INFORME).forEach((campo) => {
+    const valor = extraido[campo];
+    if (valor === undefined || valor === null || valor === "") return;
+    document.getElementById(CAMPO_A_INPUT_INFORME[campo]).value = valor;
+    camposLlenados++;
+  });
+  if (Array.isArray(extraido.amparos) && extraido.amparos.length) {
+    leerAmparosDesdeFormulario();
+    const yaExisten = amparosActuales.map((a) => JSON.stringify(a));
+    extraido.amparos.forEach((a) => {
+      const nuevo = {
+        tipo: a.tipo || "", porcentaje: a.porcentaje || "", valorAsegurado: a.valorAsegurado || "",
+        vigenciaDesde: a.vigenciaDesde || "", vigenciaHasta: a.vigenciaHasta || "",
+      };
+      if (yaExisten.indexOf(JSON.stringify(nuevo)) === -1) amparosActuales.push(nuevo);
+    });
+    renderAmparos();
+    camposLlenados++;
+  }
+  return camposLlenados > 0;
+}
 
 document.querySelectorAll(".inputAdjuntoInforme").forEach((input) => {
   input.addEventListener("change", async () => {
@@ -1502,17 +1523,25 @@ document.querySelectorAll(".inputAdjuntoInforme").forEach((input) => {
       return;
     }
     const statusEl = document.querySelector(`.statusAdjunto[data-tipo="${tipo}"]`);
-    statusEl.innerHTML = '<span class="spinner"></span> Subiendo...';
+    statusEl.innerHTML = '<span class="spinner"></span> Leyendo con IA...';
     try {
-      const base64 = await archivoABase64(file);
+      const fd = new FormData();
+      fd.append("tipo", tipo);
+      fd.append("archivo", file);
       const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/documentos`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tipo, base64, mime: file.type, nombre: file.name }),
+        method: "POST", body: fd,
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Error al subir el archivo");
       marcarAdjuntoCargado(tipo, data.url);
-      mostrarToast(`${etiqueta} adjuntado ✓`);
+      const seLlenoAlgo = aplicarDatosExtraidos_(data.extraido);
+      if (data.necesitaRevision) {
+        mostrarToast(`${etiqueta} adjuntado, pero la IA no pudo leerlo bien del todo -- revisa los campos`, true);
+      } else if (seLlenoAlgo) {
+        mostrarToast(`${etiqueta} adjuntado ✓ revisa los campos que se llenaron solos`);
+      } else {
+        mostrarToast(`${etiqueta} adjuntado ✓ (la IA no encontró datos para autocompletar, llena los campos a mano)`);
+      }
     } catch (err) {
       statusEl.textContent = "";
       mostrarToast(`Error al adjuntar ${etiqueta}: ` + err.message, true);

@@ -2,17 +2,27 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const multer = require("multer");
+const Anthropic = require("@anthropic-ai/sdk");
 
 const PORT = process.env.PORT || 3000;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+// Mismo patron que la app de gastos (gastos-jacbel): Haiku primero (rapido y
+// barato), y si la lectura queda incompleta se reintenta una vez con Sonnet
+// antes de rendirse y devolver lo mejor que se haya podido leer.
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-haiku-4-5-20251001";
+const CLAUDE_MODEL_REINTENTO = process.env.CLAUDE_MODEL_REINTENTO || "claude-sonnet-5";
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
 app.use(cors());
-// 25mb: los adjuntos del Informe de Supervision (PDFs escaneados de polizas
-// o del contrato) pueden pesar varios MB, y viajan como base64 dentro del
-// JSON (~33% mas pesado que el archivo original).
+// 25mb: algunos endpoints (guardar datos del informe) siguen viajando como
+// JSON normal; los adjuntos en si (PDFs/fotos) van aparte por multipart
+// (ver "upload" mas abajo), no dentro de este limite.
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "..", "frontend")));
+
+const upload = multer({ limits: { fileSize: 12 * 1024 * 1024 } });
 
 function requireAppsScriptUrl() {
   if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL");
@@ -206,6 +216,94 @@ app.delete("/api/medidas/:medidaId", async (req, res) => {
   }
 });
 
+// ---------- Informe del Contratista (AP2-FO-024): lectura con IA de adjuntos ----------
+//
+// Mismo mecanismo que ya usa la app de gastos (gastos-jacbel): se manda la
+// foto o el PDF a Claude con vision, pidiendole que devuelva SOLO un JSON
+// con los campos que le corresponden a ese tipo de documento. La IA nunca
+// escribe directo en la hoja de la obra -- lo que devuelve solo llega a
+// precargar el formulario en el navegador; el usuario revisa/corrige y
+// recien ahi, al presionar "Guardar datos del informe", queda guardado.
+const PROMPT_POR_TIPO_DOCUMENTO = {
+  acta_inicio: `Estas leyendo el Acta de Inicio de un contrato de obra publica en Colombia (puede ser una foto o un PDF, escaneado o digital). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+{
+  "numeroContrato": "numero o codigo del contrato, tal como aparece",
+  "objeto": "objeto/descripcion del contrato",
+  "contratista": "nombre de la persona o empresa contratista",
+  "valorInicial": 12345678,
+  "plazo": "plazo del contrato tal como aparece (ej: '6 meses', '180 dias')",
+  "fechaActaInicio": "YYYY-MM-DD",
+  "fechaTerminacionInicial": "YYYY-MM-DD"
+}
+Reglas: "valorInicial" es el valor del contrato en pesos colombianos (COP), numero entero sin puntos ni comas ni simbolo de moneda -- si no aparece en el acta, deja 0. "fechaTerminacionInicial" normalmente se calcula sumando el plazo a la fecha del acta si no aparece explicita -- si no puedes determinarla con confianza, deja "". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible o no aparece, usa "" (o 0 para valorInicial) solo en ese campo, sin inventar.`,
+  polizas: `Estas leyendo un documento de aprobacion de polizas/garantias de un contrato de obra publica en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+{
+  "polizaCumplimiento": "numero de la poliza de cumplimiento",
+  "polizaResponsabilidadCivil": "numero de la poliza de responsabilidad civil extracontractual",
+  "companiaAseguradora": "nombre de la compañia aseguradora",
+  "amparos": [
+    { "tipo": "nombre del amparo, ej Cumplimiento, Calidad, Estabilidad, Pago de Salarios y Prestaciones, Responsabilidad Civil Extracontractual", "porcentaje": 10, "valorAsegurado": 12345678, "vigenciaDesde": "YYYY-MM-DD", "vigenciaHasta": "YYYY-MM-DD" }
+  ]
+}
+Reglas: incluye en "amparos" TODOS los amparos/coberturas que encuentres en el documento, uno por elemento del arreglo (usualmente son varios: cumplimiento, calidad, estabilidad, salarios y prestaciones, responsabilidad civil, etc). "porcentaje" es el % del valor del contrato que cubre ese amparo, como numero (sin simbolo %). "valorAsegurado" es el valor asegurado de ese amparo en pesos colombianos (COP), numero entero. Si el documento tiene varias polizas (cumplimiento y responsabilidad civil por separado, cada una con sus propios amparos), junta todos los amparos de ambas en el mismo arreglo. Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible, usa "" (o 0 para los numericos) solo en ese campo, sin inventar. Si no encuentras ningun amparo, usa un arreglo vacio [].`,
+  contrato: `Estas leyendo el contrato (o su primera pagina/resumen) de una obra publica en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+{
+  "numeroContrato": "numero o codigo del contrato",
+  "objeto": "objeto/descripcion del contrato",
+  "contratista": "nombre de la persona o empresa contratista",
+  "valorInicial": 12345678,
+  "plazo": "plazo del contrato tal como aparece"
+}
+Reglas: "valorInicial" en pesos colombianos (COP), numero entero sin puntos ni comas ni simbolo de moneda -- si no aparece, deja 0. Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible, usa "" (o 0 para valorInicial) solo en ese campo, sin inventar.`,
+  comprobante_anticipo: `Estas leyendo un comprobante de pago/cobro de anticipo de un contrato de obra publica en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+{
+  "valorAnticipo": 12345678,
+  "porcentajeAnticipo": 30
+}
+Reglas: "valorAnticipo" es el valor pagado/cobrado como anticipo en pesos colombianos (COP), numero entero sin puntos ni comas ni simbolo de moneda. "porcentajeAnticipo" es el % de anticipo pactado si aparece explicito en el comprobante (numero sin simbolo %); si no aparece, deja "". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo es ilegible, usa "" (o 0 para valorAnticipo) solo en ese campo, sin inventar.`,
+};
+
+// Un campo por tipo que, si viene lleno (o hay al menos un amparo), se
+// considera que la lectura "sirvio" -- si ni siquiera eso vino, se
+// reintenta con el modelo mas grande antes de rendirse.
+function extraccionEsUtil_(tipo, extraido) {
+  if (!extraido) return false;
+  if (tipo === "polizas") return Array.isArray(extraido.amparos) && extraido.amparos.length > 0 || !!extraido.polizaCumplimiento;
+  if (tipo === "comprobante_anticipo") return Number(extraido.valorAnticipo) > 0;
+  return !!(extraido.numeroContrato || extraido.contratista || extraido.objeto);
+}
+
+async function leerDocumentoInformeConIA_(tipo, base64Data, mediaType) {
+  const prompt = PROMPT_POR_TIPO_DOCUMENTO[tipo];
+  if (!prompt) return { extraido: null, necesitaRevision: false };
+  const esPdf = (mediaType || "").indexOf("pdf") !== -1;
+  const bloqueArchivo = esPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
+    : { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64Data } };
+
+  const intentos = [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
+  let ultimoExtraido = null;
+  for (let i = 0; i < intentos.length; i++) {
+    try {
+      const message = await anthropic.messages.create({
+        model: intentos[i],
+        max_tokens: 1200,
+        messages: [{ role: "user", content: [bloqueArchivo, { type: "text", text: prompt }] }],
+      });
+      const textBlock = message.content.find((b) => b.type === "text");
+      const jsonMatch = textBlock && textBlock.text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const extraido = JSON.parse(jsonMatch[0]);
+        ultimoExtraido = extraido;
+        if (extraccionEsUtil_(tipo, extraido)) return { extraido, necesitaRevision: false };
+      }
+    } catch (err) {
+      console.error(`Lectura IA (${tipo}) fallo con modelo ${intentos[i]}:`, err.message);
+    }
+  }
+  return { extraido: ultimoExtraido, necesitaRevision: true };
+}
+
 // ---------- Informe de Supervision (AP2-FO-024) ----------
 
 app.get("/api/obras/:obraId/informe-supervision", async (req, res) => {
@@ -231,13 +329,28 @@ app.put("/api/obras/:obraId/informe-supervision", async (req, res) => {
   }
 });
 
-app.post("/api/obras/:obraId/informe-supervision/documentos", async (req, res) => {
+app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("archivo"), async (req, res) => {
   try {
     requireAppsScriptUrl();
-    const { tipo, base64 } = req.body;
-    if (!tipo || !base64) return res.status(400).json({ error: "Falta tipo o base64 del archivo" });
-    const data = await llamarAppsScriptPost({ accion: "subir_documento_informe", obraId: req.params.obraId, ...req.body });
-    res.json(data);
+    const tipo = req.body.tipo;
+    if (!tipo) return res.status(400).json({ error: "Falta el tipo de documento" });
+    if (!req.file) return res.status(400).json({ error: "Falta el archivo" });
+
+    const base64 = req.file.buffer.toString("base64");
+    const mime = req.file.mimetype || "application/pdf";
+
+    // La lectura con IA y la subida a Drive corren en paralelo: si la IA
+    // falla o tarda, el archivo igual queda guardado (no dependen una de
+    // la otra).
+    const [lectura, subida] = await Promise.all([
+      leerDocumentoInformeConIA_(tipo, base64, mime),
+      llamarAppsScriptPost({
+        accion: "subir_documento_informe", obraId: req.params.obraId, tipo, base64, mime, nombre: req.file.originalname,
+      }),
+    ]);
+
+    if (!subida.ok) return res.status(502).json({ error: subida.error || "No se pudo guardar el archivo" });
+    res.json({ ok: true, url: subida.url, campo: subida.campo, extraido: lectura.extraido, necesitaRevision: lectura.necesitaRevision });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });
