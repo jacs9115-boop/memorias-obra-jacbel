@@ -725,9 +725,20 @@ function calcularResumenInforme_(body) {
     });
   });
 
+  // Los "items" (y su VR Unitario) representan el COSTO DIRECTO de cada
+  // actividad -- lo mismo que "TOTAL COSTOS DIRECTOS TCD" en la hoja
+  // "Ejecucion Real" (ver regenerarEjecucionReal_). Lo que realmente se
+  // cobra en un acta es el COSTO TOTAL (TCD + Administracion 30,4% +
+  // Imprevistos 1% + Utilidad 6%, los mismos porcentajes que ya usa
+  // "Ejecucion Real"), no el TCD solo -- por eso se aplica el mismo
+  // factor antes de devolver los totales.
+  var FACTOR_AIU_ = 1 + 0.304 + 0.01 + 0.06;
+
   return {
     ok: true, items: items, fotos: fotos,
-    totalContratadoVr: totalContratadoVr, totalEjecutadoPeriodoVr: totalEjecutadoPeriodoVr, totalEjecutadoAcumuladoVr: totalEjecutadoAcumuladoVr,
+    totalContratadoVr: totalContratadoVr * FACTOR_AIU_,
+    totalEjecutadoPeriodoVr: totalEjecutadoPeriodoVr * FACTOR_AIU_,
+    totalEjecutadoAcumuladoVr: totalEjecutadoAcumuladoVr * FACTOR_AIU_,
     sinArchivoOficial: !fileId,
   };
 }

@@ -74,11 +74,21 @@ function bloqueEncabezado(datos) {
     new Paragraph({ spacing: { after: 200 }, children: [] }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 60 },
+      spacing: { after: 40 },
       children: [new TextRun({
-        text: datos.tipoInforme === "Final" ? "INFORME FINAL DEL CONTRATISTA" : `INFORME PARCIAL No. ${datos.numeroParcial || ""} DEL CONTRATISTA`,
+        text: datos.tipoInforme === "Final" ? "INFORME FINAL" : `INFORME PARCIAL No. ${datos.numeroParcial || ""}`,
         bold: true, size: 28, color: AZUL_OSCURO,
       })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 20 },
+      children: [new TextRun({ text: "CONTRATISTA", bold: true, size: 20, color: AZUL_OSCURO })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+      children: [new TextRun({ text: datos.contratista || "", bold: true, size: 20 })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -128,72 +138,30 @@ function tablaInfoContrato(datos) {
   });
 }
 
-// ---------- 2. Actividades generales (para completar a mano) ----------
-function tablaActividadesGenerales(datos) {
-  const filas = [
-    ["Reunión visita previa al sitio de la obra", "", "", ""],
-    ["Iniciación", "X", fmtFecha(datos.fechaActaInicio), ""],
-    ["Suspensión", "", "", ""],
-    ["Reinicio", "", "", ""],
-    ["Recibo", datos.tipoInforme === "Final" ? "X" : "", "", ""],
-    ["Liquidación", "", "", ""],
-    ["Otros", "", "", ""],
-  ];
-  const header = new TableRow({
-    children: [
-      celda("ACTA", { width: 3500, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("SI/NO", { width: 1200, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("FECHA", { width: 1800, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("OBSERVACIONES", { width: 3000, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-    ],
+// ---------- 2. Resumen de actividades ejecutadas ----------
+// Narrativo, no tabla: lista las actividades (items) que se estan
+// cobrando en el periodo de este acta -- es decir, los items del
+// presupuesto con cantidad ejecutada > 0 dentro del rango de fechas.
+function resumenActividadesNarrativo(items) {
+  const delPeriodo = (items || []).filter((it) => Number(it.cantidadEjecutadaPeriodo) > 0);
+  if (!delPeriodo.length) {
+    return [parrafo("No se registró ejecución de actividades dentro del periodo reportado.", { italic: true })];
+  }
+  const bloques = [parrafo("Durante el periodo reportado se ejecutaron y se cobran en la presente acta las siguientes actividades:")];
+  delPeriodo.forEach((it) => {
+    bloques.push(new Paragraph({
+      indent: { left: 300 },
+      spacing: { after: 80 },
+      children: [new TextRun({
+        text: `- Item ${it.item} — ${it.descripcion}: ${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}`,
+        size: 20,
+      })],
+    }));
   });
-  return new Table({
-    width: { size: 9500, type: WidthType.DXA },
-    columnWidths: [3500, 1200, 1800, 3000],
-    rows: [header].concat(filas.map((f) => new TableRow({
-      children: [
-        celda(f[0], { width: 3500 }),
-        celda(f[1], { width: 1200, align: AlignmentType.CENTER }),
-        celda(f[2], { width: 1800, align: AlignmentType.CENTER }),
-        celda(f[3], { width: 3000 }),
-      ],
-    }))),
-  });
+  return bloques;
 }
 
-// ---------- 3. Resumen de actividades ejecutadas ----------
-function tablaResumenActividades(items) {
-  const header = new TableRow({
-    tableHeader: true,
-    children: [
-      celda("Item", { width: 700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Descripción", { width: 3400, bold: true, bg: AZUL_OSCURO, color: "FFFFFF" }),
-      celda("Und.", { width: 700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Cant. contratada", { width: 1200, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Ejecutado este periodo", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Ejecutado acumulado", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Saldo por ejecutar", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-    ],
-  });
-  const filas = items.map((it) => new TableRow({
-    children: [
-      celda(it.item, { width: 700, align: AlignmentType.CENTER }),
-      celda(it.descripcion, { width: 3400 }),
-      celda(it.unidad, { width: 700, align: AlignmentType.CENTER }),
-      celda(fmtNum(it.cantidadContratada), { width: 1200, align: AlignmentType.CENTER }),
-      celda(fmtNum(it.cantidadEjecutadaPeriodo), { width: 1300, align: AlignmentType.CENTER }),
-      celda(fmtNum(it.cantidadEjecutadaAcumulada), { width: 1300, align: AlignmentType.CENTER }),
-      celda(fmtNum(it.cantidadContratada - it.cantidadEjecutadaAcumulada), { width: 1300, align: AlignmentType.CENTER }),
-    ],
-  }));
-  return new Table({
-    width: { size: 9900, type: WidthType.DXA },
-    columnWidths: [700, 3400, 700, 1200, 1300, 1300, 1300],
-    rows: [header].concat(filas),
-  });
-}
-
-// ---------- 4. Balance financiero ----------
+// ---------- 3. Balance financiero ----------
 // SUMAS IGUALES: se arma con "Acumulado ejecutado a la fecha" (no con
 // "Valor Acta del periodo") para que la cuenta cuadre SIEMPRE contra el
 // valor del contrato, sin importar si este es el informe No. 1 o uno
@@ -229,7 +197,7 @@ function tablaBalanceFinanciero(b) {
   });
 }
 
-// ---------- 5. Garantias ----------
+// ---------- 4. Garantias ----------
 function tablaPolizas(datos) {
   const filas = [
     ["Compañía aseguradora", datos.companiaAseguradora],
@@ -271,7 +239,7 @@ function tablaAmparos(amparos) {
   });
 }
 
-// ---------- 7. Registro fotografico ----------
+// ---------- 6. Cronologia y 7. Registro fotografico ----------
 async function descargarImagenDrive_(fotoUrl) {
   const m = (fotoUrl || "").match(/\/d\/([^/]+)\//);
   if (!m) return null;
@@ -323,29 +291,24 @@ async function generarInformeContratistaDocx(datos, balance, items, fotos) {
   children.push(tituloSeccion("1. Información del contrato"));
   children.push(tablaInfoContrato(datos));
 
-  children.push(tituloSeccion("2. Actividades generales realizadas durante el contrato"));
-  children.push(parrafo("(Completar a mano las que apliquen; \"Iniciación\" queda precargada con la fecha del Acta de Inicio.)", { italic: true, size: 16 }));
-  children.push(tablaActividadesGenerales(datos));
+  children.push(tituloSeccion("2. Resumen de actividades ejecutadas"));
+  children.push(...resumenActividadesNarrativo(items));
 
-  children.push(tituloSeccion("3. Cronología del periodo reportado"));
-  children.push(parrafo(`Durante el periodo comprendido entre el ${fmtFecha(datos.fechaDesde)} y el ${fmtFecha(datos.fechaHasta)}, el contratista ejecutó las actividades descritas en el numeral 4.`));
-  children.push(parrafo("[Agregar aquí una descripción narrativa breve del desarrollo del periodo, novedades, etc.]", { italic: true }));
-
-  children.push(tituloSeccion("4. Resumen de actividades ejecutadas"));
-  children.push(tablaResumenActividades(items));
-
-  children.push(tituloSeccion("5. Balance financiero del contrato"));
+  children.push(tituloSeccion("3. Balance financiero del contrato"));
   children.push(tablaBalanceFinanciero(balance));
 
-  children.push(tituloSeccion("6. Seguimiento y control de las garantías exigidas"));
+  children.push(tituloSeccion("4. Seguimiento y control de las garantías exigidas"));
   children.push(tablaPolizas(datos));
   children.push(new Paragraph({ spacing: { before: 160, after: 80 }, children: [] }));
   children.push(tablaAmparos(datos.amparos));
 
-  children.push(tituloSeccion("7. Observaciones"));
+  children.push(tituloSeccion("5. Observaciones"));
   children.push(parrafo("[Agregar aquí observaciones adicionales, si aplica.]", { italic: true }));
 
-  children.push(tituloSeccion("8. Registro fotográfico"));
+  children.push(tituloSeccion("6. Cronología del periodo reportado"));
+  children.push(parrafo(`Durante el periodo comprendido entre el ${fmtFecha(datos.fechaDesde)} y el ${fmtFecha(datos.fechaHasta)}, se ejecutaron las actividades descritas en el numeral 2.`));
+
+  children.push(tituloSeccion("7. Registro fotográfico"));
   children.push(...(await seccionFotos(fotos)));
 
   children.push(new Paragraph({ spacing: { before: 600 }, children: [] }));
