@@ -447,7 +447,7 @@ function leerCamposInforme_(ss) {
   var datos = {};
   if (lastRow > 1) {
     hoja.getRange(2, 1, lastRow - 1, 2).getValues().forEach(function (r) {
-      if (r[0]) datos[r[0]] = r[1];
+      if (r[0]) datos[r[0]] = valorPlano_(r[1]);
     });
   }
   return datos;
@@ -460,8 +460,25 @@ function leerAmparos_(ss) {
   return hoja.getRange(2, 1, lastRow - 1, 5).getValues()
     .filter(function (r) { return r.some(function (v) { return v !== ""; }); })
     .map(function (r) {
-      return { tipo: r[0], porcentaje: r[1], valorAsegurado: r[2], vigenciaDesde: r[3], vigenciaHasta: r[4] };
+      return {
+        tipo: valorPlano_(r[0]), porcentaje: valorPlano_(r[1]), valorAsegurado: valorPlano_(r[2]),
+        vigenciaDesde: valorPlano_(r[3]), vigenciaHasta: valorPlano_(r[4]),
+      };
     });
+}
+
+// Si Sheets interpreto un texto como "2026-07-18" y lo convirtio solo a un
+// objeto Date (pasa facil con columnas donde TODA la fila que se escribe de
+// una sola vez parece fecha), lo devuelve como texto plano "YYYY-MM-DD" de
+// nuevo -- si no, lo deja tal cual. Sin esto, el campo le llega al
+// <input type="date"> del formulario con hora/zona incluida y no lo
+// reconoce, asi que el formulario se ve vacio aunque el dato si este
+// guardado.
+function valorPlano_(v) {
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return v;
 }
 
 // Actualiza SOLO los campos que vienen en "camposParciales" (los demas
@@ -483,7 +500,15 @@ function upsertCamposInforme_(ss, camposParciales) {
   var filas = claves
     .filter(function (k) { return actuales[k] !== undefined && actuales[k] !== ""; })
     .map(function (k) { return [k, actuales[k]]; });
-  if (filas.length) hoja.getRange(2, 1, filas.length, 2).setValues(filas);
+  if (filas.length) {
+    // Texto plano ANTES de escribir: la columna "Valor" mezcla numeros,
+    // fechas y texto libre segun la fila, y sin esto Sheets a veces
+    // convierte solo de una las que parecen fecha a un objeto Date real
+    // (ver valorPlano_ arriba, que ademas cubre los datos que hayan
+    // quedado asi guardados de antes de este arreglo).
+    hoja.getRange(2, 1, filas.length, 2).setNumberFormat("@");
+    hoja.getRange(2, 1, filas.length, 2).setValues(filas);
+  }
   return actuales;
 }
 
@@ -494,7 +519,12 @@ function guardarAmparos_(ss, amparos) {
   var filas = (amparos || [])
     .filter(function (a) { return a && (a.tipo || a.valorAsegurado); })
     .map(function (a) { return [a.tipo || "", a.porcentaje || "", a.valorAsegurado || "", a.vigenciaDesde || "", a.vigenciaHasta || ""]; });
-  if (filas.length) hoja.getRange(2, 1, filas.length, 5).setValues(filas);
+  if (filas.length) {
+    // Mismo motivo que en upsertCamposInforme_: forzar texto plano para
+    // que las columnas de vigencia no queden como fecha real de Sheets.
+    hoja.getRange(2, 1, filas.length, 5).setNumberFormat("@");
+    hoja.getRange(2, 1, filas.length, 5).setValues(filas);
+  }
 }
 
 function guardarDatosInforme_(body) {
