@@ -4,6 +4,8 @@ const cors = require("cors");
 const path = require("path");
 const multer = require("multer");
 const Anthropic = require("@anthropic-ai/sdk");
+const { Packer } = require("docx");
+const { generarInformeContratistaDocx } = require("./informe");
 
 const PORT = process.env.PORT || 3000;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
@@ -351,6 +353,87 @@ app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("arc
 
     if (!subida.ok) return res.status(502).json({ error: subida.error || "No se pudo guardar el archivo" });
     res.json({ ok: true, url: subida.url, campo: subida.campo, extraido: lectura.extraido, necesitaRevision: lectura.necesitaRevision });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+app.get("/api/obras/:obraId/informe-supervision/historial", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScript(`${APPS_SCRIPT_URL}?historialInformes=${encodeURIComponent(req.params.obraId)}`);
+    if (data && data.error) return res.status(400).json({ error: data.error });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// Genera el .docx del Informe del Contratista para un periodo puntual:
+// junta los datos manuales (Fase 1) + el balance/resumen calculado en Apps
+// Script para ese rango de fechas, arma el documento con la libreria docx
+// (ver informe.js), lo sube a Drive y lo deja registrado en el historial de
+// la obra, y ademas lo devuelve directo para descarga inmediata.
+app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const obraId = req.params.obraId;
+    const { fechaDesde, fechaHasta, tipoInforme, numeroParcial } = req.body;
+    if (!fechaDesde || !fechaHasta) return res.status(400).json({ error: "Falta la fecha de inicio o de fin del periodo" });
+    if (tipoInforme !== "Parcial" && tipoInforme !== "Final") return res.status(400).json({ error: "El tipo de informe debe ser Parcial o Final" });
+
+    const [datosInforme, resumen] = await Promise.all([
+      llamarAppsScript(`${APPS_SCRIPT_URL}?informeSupervision=${encodeURIComponent(obraId)}`),
+      llamarAppsScriptPost({ accion: "calcular_resumen_informe", obraId, fechaDesde, fechaHasta }),
+    ]);
+    if (!datosInforme.ok) return res.status(400).json({ error: datosInforme.error || "No se pudieron leer los datos del informe" });
+    if (!resumen.ok) return res.status(400).json({ error: resumen.error || "No se pudo calcular el resumen del periodo" });
+
+    const datos = Object.assign({}, datosInforme.datos, {
+      amparos: datosInforme.amparos || [],
+      tipoInforme, numeroParcial: numeroParcial || "",
+      fechaDesde, fechaHasta,
+    });
+
+    const valorContrato = Number(datos.valorInicial) || 0;
+    const porcentajeAnticipo = Number(datos.porcentajeAnticipo) || 0;
+    const valorActaPeriodo = resumen.totalEjecutadoPeriodoVr || 0;
+    const amortizacionAnticipo = valorActaPeriodo * (porcentajeAnticipo / 100);
+    const acumuladoEjecutado = resumen.totalEjecutadoAcumuladoVr || 0;
+    const balance = {
+      valorContrato,
+      valorAnticipoPagado: Number(datos.valorAnticipo) || 0,
+      porcentajeAnticipo,
+      valorActaPeriodo,
+      amortizacionAnticipo,
+      valorNetoAPagar: valorActaPeriodo - amortizacionAnticipo,
+      acumuladoEjecutado,
+      saldoPorEjecutar: Math.max(0, valorContrato - acumuladoEjecutado),
+      saldoAFavor: Math.max(0, acumuladoEjecutado - valorContrato),
+      tipoInforme, numeroParcial: numeroParcial || "",
+    };
+
+    const doc = await generarInformeContratistaDocx(datos, balance, resumen.items || [], resumen.fotos || []);
+    const buffer = await Packer.toBuffer(doc);
+    const nombreArchivo = `Informe ${tipoInforme === "Final" ? "Final" : "Parcial " + (numeroParcial || "")} - ${datos.numeroContrato || obraId} - ${fechaHasta}.docx`.replace(/\s+/g, " ");
+
+    // Se guarda en Drive y queda en el historial ademas de devolverse para
+    // descarga directa, para no perder el enlace si se cierra la pestaña
+    // sin descargar.
+    const subida = await llamarAppsScriptPost({ accion: "subir_informe_generado", obraId, base64: buffer.toString("base64"), nombre: nombreArchivo });
+    if (subida.ok) {
+      await llamarAppsScriptPost({
+        accion: "registrar_informe_generado", obraId, tipo: tipoInforme, numeroParcial: numeroParcial || "",
+        fechaDesde, fechaHasta, urlDocx: subida.url,
+      });
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombreArchivo.replace(/"/g, "")}"`);
+    if (subida.ok) res.setHeader("X-Informe-Drive-Url", subida.url);
+    res.send(buffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });

@@ -9,6 +9,7 @@ function doGet(e) {
     if (e.parameter.previsualizar) return jsonOutput_(parsearPresupuesto_(e.parameter.previsualizar));
     if (e.parameter.obra) return jsonOutput_(leerObra_(e.parameter.obra));
     if (e.parameter.informeSupervision) return jsonOutput_(obtenerDatosInforme_(e.parameter.informeSupervision));
+    if (e.parameter.historialInformes) return jsonOutput_(listarHistorialInformes_(e.parameter.historialInformes));
     return jsonOutput_({ error: "Parametro no reconocido" });
   } catch (err) {
     return jsonOutput_({ error: String(err) });
@@ -30,6 +31,9 @@ function doPost(e) {
     if (body.accion === "actualizar_reportes") return jsonOutput_(actualizarReportesObra_(body));
     if (body.accion === "guardar_datos_informe") return jsonOutput_(guardarDatosInforme_(body));
     if (body.accion === "subir_documento_informe") return jsonOutput_(subirDocumentoInforme_(body));
+    if (body.accion === "calcular_resumen_informe") return jsonOutput_(calcularResumenInforme_(body));
+    if (body.accion === "registrar_informe_generado") return jsonOutput_(registrarInformeGenerado_(body));
+    if (body.accion === "subir_informe_generado") return jsonOutput_(subirInformeGeneradoDocx_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -578,6 +582,179 @@ function subirDocumentoInforme_(body) {
     return { ok: true, url: url, campo: campo };
   } catch (err) {
     return { ok: false, error: "No se pudo subir el archivo: " + err };
+  }
+}
+
+// ---------- Historial de informes generados ----------
+
+function hojaHistorialInformes_(ss) {
+  var hoja = ss.getSheetByName("HistorialInformes");
+  if (!hoja) {
+    hoja = ss.insertSheet("HistorialInformes");
+    hoja.getRange(1, 1, 1, 6).setValues([["FechaGeneracion", "Tipo", "NumeroParcial", "FechaDesde", "FechaHasta", "UrlDocx"]]).setFontWeight("bold");
+    hoja.setFrozenRows(1);
+  }
+  return hoja;
+}
+
+function leerHistorialInformes_(ss) {
+  var hoja = hojaHistorialInformes_(ss);
+  var lastRow = hoja.getLastRow();
+  if (lastRow < 2) return [];
+  return hoja.getRange(2, 1, lastRow - 1, 6).getValues()
+    .filter(function (r) { return r.some(function (v) { return v !== ""; }); })
+    .map(function (r) {
+      return {
+        fechaGeneracion: valorPlano_(r[0]), tipo: r[1], numeroParcial: r[2],
+        fechaDesde: valorPlano_(r[3]), fechaHasta: valorPlano_(r[4]), urlDocx: r[5],
+      };
+    });
+}
+
+function registrarInformeGenerado_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hoja = hojaHistorialInformes_(ss);
+  var fechaGeneracion = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  var fila = [fechaGeneracion, body.tipo || "", body.numeroParcial || "", body.fechaDesde || "", body.fechaHasta || "", body.urlDocx || ""];
+  hoja.getRange(hoja.getLastRow() + 1, 1, 1, 6).setNumberFormat("@").setValues([fila]);
+  return { ok: true, historial: leerHistorialInformes_(ss) };
+}
+
+function listarHistorialInformes_(obraId) {
+  var obra = buscarObra_(obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var historial = leerHistorialInformes_(ss);
+  // Sugerencia de numero de parcial: 1 + cuantos "Parcial" ya se generaron
+  // (el usuario siempre puede escribir otro numero distinto a mano).
+  var siguienteParcial = 1 + historial.filter(function (h) { return h.tipo === "Parcial"; }).length;
+  return { ok: true, historial: historial, siguienteParcialSugerido: siguienteParcial };
+}
+
+// ---------- Balance financiero y resumen de actividades por periodo de corte ----------
+//
+// A diferencia de "Ejecucion Real" (siempre acumulado desde el inicio de la
+// obra, se regenera completa cada vez), esto calcula DOS cortes a la vez
+// para un rango de fechas puntual (el periodo que se va a cobrar en este
+// informe): lo ejecutado SOLO en ese periodo (para "Valor Acta N"), y lo
+// ejecutado acumulado hasta la fecha final del periodo (para "Saldo por
+// ejecutar") -- ninguno de los dos existia antes porque hasta ahora todo se
+// leia siempre acumulado desde el inicio, sin filtrar por fecha.
+function calcularResumenInforme_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var fechaDesde = normalizarTexto_(body.fechaDesde);
+  var fechaHasta = normalizarTexto_(body.fechaHasta);
+  if (!fechaDesde || !fechaHasta) return { ok: false, error: "Falta la fecha de inicio o de fin del periodo" };
+
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+
+  var hojaPres = ss.getSheetByName("Presupuesto");
+  var ultimaFilaPres = hojaPres.getLastRow();
+  var filasPres = ultimaFilaPres > 1 ? hojaPres.getRange(2, 1, ultimaFilaPres - 1, 9).getValues() : [];
+
+  var hojaMemoria = ss.getSheetByName("Memoria");
+  var ultimaFilaMemoria = hojaMemoria.getLastRow();
+  var filasMemoria = ultimaFilaMemoria > 1 ? hojaMemoria.getRange(2, 1, ultimaFilaMemoria - 1, 14).getValues() : [];
+
+  // Cantidad ejecutada por item, separada en "de este periodo" (fecha entre
+  // fechaDesde y fechaHasta, ambas inclusive) y "acumulada a la fecha"
+  // (cualquier fecha hasta fechaHasta inclusive, sin importar cuando empezo).
+  var ejecutadoPeriodo = {}, ejecutadoAcumulado = {};
+  filasMemoria.forEach(function (r) {
+    var fechaMedida = String(r[1] || "").slice(0, 10);
+    if (!fechaMedida) return;
+    var tipo = tipoUnidad_(r[5]);
+    var m = { longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10], cantidad: r[11] };
+    var cantidadParcial = calcularCantidadParcial_(tipo, m);
+    var clave = normalizarTexto_(r[2]) + "||" + normalizarTexto_(r[3]);
+    if (fechaMedida <= fechaHasta) ejecutadoAcumulado[clave] = (ejecutadoAcumulado[clave] || 0) + cantidadParcial;
+    if (fechaMedida >= fechaDesde && fechaMedida <= fechaHasta) ejecutadoPeriodo[clave] = (ejecutadoPeriodo[clave] || 0) + cantidadParcial;
+  });
+
+  // Precios: los items del presupuesto original vienen del archivo oficial
+  // aparte (igual que en regenerarEjecucionReal_); los agregados desde la
+  // app (Origen="APP") ya traen su propio VR Unitario en la misma hoja
+  // Presupuesto.
+  var preciosOficiales = {};
+  var fileId = buscarPresupuestoOficialPorContrato_(obra.numeroContrato);
+  if (fileId) {
+    var direccionesConocidas = {};
+    filasPres.forEach(function (r) { if (r[0]) direccionesConocidas[normalizarTexto_(r[0])] = true; });
+    leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas).forEach(function (f) {
+      if (f.nivel === 3) preciosOficiales[f.direccion + "||" + f.item] = f.vrUnit;
+    });
+  }
+
+  var items = [];
+  var totalContratadoVr = 0, totalEjecutadoPeriodoVr = 0, totalEjecutadoAcumuladoVr = 0;
+  filasPres.forEach(function (r) {
+    var direccion = normalizarTexto_(r[0]), item = normalizarTexto_(r[2]);
+    if (!direccion || !item) return;
+    var clave = direccion + "||" + item;
+    var esApp = r[8] === "APP";
+    var vrUnitario = esApp ? (Number(r[7]) || 0) : (Number(preciosOficiales[clave]) || 0);
+    var cantidadContratada = Number(r[5]) || 0;
+    var cantPeriodo = ejecutadoPeriodo[clave] || 0;
+    var cantAcumulado = ejecutadoAcumulado[clave] || 0;
+    var vrPeriodo = cantPeriodo * vrUnitario;
+    var vrAcumulado = cantAcumulado * vrUnitario;
+    totalContratadoVr += cantidadContratada * vrUnitario;
+    totalEjecutadoPeriodoVr += vrPeriodo;
+    totalEjecutadoAcumuladoVr += vrAcumulado;
+    if (cantidadContratada || cantPeriodo || cantAcumulado) {
+      items.push({
+        direccion: r[0], item: item, descripcion: normalizarTexto_(r[3]), unidad: normalizarTexto_(r[4]),
+        cantidadContratada: cantidadContratada, vrUnitario: vrUnitario,
+        cantidadEjecutadaPeriodo: cantPeriodo, vrEjecutadoPeriodo: vrPeriodo,
+        cantidadEjecutadaAcumulada: cantAcumulado, vrEjecutadoAcumulado: vrAcumulado,
+      });
+    }
+  });
+
+  // Fotos de las mediciones tomadas DENTRO del periodo (las de este corte),
+  // agrupadas luego por direccion/item en el generador del Word.
+  var fotos = [];
+  filasMemoria.forEach(function (r) {
+    var fechaMedida = String(r[1] || "").slice(0, 10);
+    if (fechaMedida < fechaDesde || fechaMedida > fechaHasta) return;
+    separarFotos_(r[12]).forEach(function (url) {
+      fotos.push({ direccion: r[2], item: r[3], descripcion: r[4], fotoUrl: url, fecha: fechaMedida });
+    });
+  });
+
+  return {
+    ok: true, items: items, fotos: fotos,
+    totalContratadoVr: totalContratadoVr, totalEjecutadoPeriodoVr: totalEjecutadoPeriodoVr, totalEjecutadoAcumuladoVr: totalEjecutadoAcumuladoVr,
+    sinArchivoOficial: !fileId,
+  };
+}
+
+// Sube el .docx YA GENERADO (por el backend Node, con la libreria docx) a
+// la misma carpeta de Drive de esta obra -- a diferencia de
+// subirDocumentoInforme_, este no actualiza ningun campo de
+// InformeSupervision (un informe generado no es un dato del contrato, es un
+// documento de salida; queda registrado aparte en HistorialInformes via
+// registrarInformeGenerado_).
+function subirInformeGeneradoDocx_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var b64 = base64Valido_(body.base64);
+  if (!b64) return { ok: false, error: "El archivo generado llegó incompleto, intenta de nuevo" };
+  try {
+    var blob = Utilities.newBlob(
+      Utilities.base64Decode(b64),
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      body.nombre || "Informe.docx"
+    );
+    var carpeta = DriveApp.getFolderById(carpetaInformesObra_(body.obraId));
+    var archivo = carpeta.createFile(blob);
+    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return { ok: true, url: archivo.getUrl() };
+  } catch (err) {
+    return { ok: false, error: "No se pudo guardar el informe generado: " + err };
   }
 }
 

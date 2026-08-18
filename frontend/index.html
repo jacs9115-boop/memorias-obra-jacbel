@@ -300,9 +300,26 @@
     <div class="card">
       <div class="status" id="statusInforme"></div>
       <button type="button" class="btn-primary" id="btnGuardarDatosInforme">Guardar datos del informe</button>
-      <div class="empty" style="padding-top:14px;font-size:12.5px;text-align:left">
-        La generación del documento Word (formato AP2-FO-024) se habilita en la siguiente fase, una vez esté cargada la plantilla oficial. Por ahora, guardar aquí deja los datos listos para cuando esté disponible.
+    </div>
+
+    <div class="card">
+      <h2>Generar documento</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px;text-align:left">
+        Elige el periodo que se va a cobrar en este informe y si es un parcial o el final. Se calcula automáticamente comparando lo contratado contra lo ejecutado en ese rango de fechas.
       </div>
+      <div class="field"><label>Periodo desde</label><input type="date" id="genFechaDesde" /></div>
+      <div class="field"><label>Periodo hasta</label><input type="date" id="genFechaHasta" /></div>
+      <div class="field">
+        <label>Tipo de informe</label>
+        <select id="genTipoInforme">
+          <option value="Parcial">Parcial</option>
+          <option value="Final">Final</option>
+        </select>
+      </div>
+      <div class="field" id="campoNumeroParcialWrap"><label>N° de parcial</label><input type="number" min="1" step="1" id="genNumeroParcial" /></div>
+      <button type="button" class="btn-primary" id="btnGenerarInformeDocx">📄 Generar y descargar</button>
+      <div class="status" id="statusGenerarInforme"></div>
+      <div id="historialInformes" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -1422,6 +1439,32 @@ async function cargarInformeSupervision() {
     statusInforme.textContent = "No se pudieron cargar datos previos: " + err.message;
     statusInforme.style.color = "#C0392B";
   }
+  cargarHistorialInformes();
+}
+
+async function cargarHistorialInformes() {
+  const cont = document.getElementById("historialInformes");
+  const campoParcial = document.getElementById("genNumeroParcial");
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/historial`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al cargar el historial");
+    if (campoParcial && !campoParcial.value) campoParcial.value = data.siguienteParcialSugerido || 1;
+    const historial = data.historial || [];
+    if (!historial.length) {
+      cont.innerHTML = '<div class="empty" style="padding:6px 0;font-size:12.5px">Todavía no has generado ningún informe para esta obra.</div>';
+      return;
+    }
+    cont.innerHTML = "<div style=\"font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:6px\">Informes generados antes:</div>" +
+      historial.slice().reverse().map((h) => `
+        <div style="font-size:12.5px;padding:6px 0;border-top:1px solid var(--border)">
+          ${h.tipo === "Final" ? "Final" : "Parcial No. " + h.numeroParcial} — ${h.fechaDesde} a ${h.fechaHasta}
+          ${h.urlDocx ? `— <a href="${h.urlDocx}" target="_blank" rel="noopener">ver / descargar</a>` : ""}
+        </div>
+      `).join("");
+  } catch (err) {
+    if (cont) cont.innerHTML = "";
+  }
 }
 
 function marcarAdjuntoCargado(tipo, url) {
@@ -1574,6 +1617,65 @@ document.getElementById("btnGuardarDatosInforme").addEventListener("click", asyn
   } finally {
     btn.disabled = false;
     btn.textContent = "Guardar datos del informe";
+  }
+});
+
+document.getElementById("genTipoInforme").addEventListener("change", (e) => {
+  document.getElementById("campoNumeroParcialWrap").style.display = e.target.value === "Final" ? "none" : "block";
+});
+
+document.getElementById("btnGenerarInformeDocx").addEventListener("click", async () => {
+  if (!obraActual) return;
+  const fechaDesde = document.getElementById("genFechaDesde").value;
+  const fechaHasta = document.getElementById("genFechaHasta").value;
+  const tipoInforme = document.getElementById("genTipoInforme").value;
+  const numeroParcial = document.getElementById("genNumeroParcial").value.trim();
+  const statusEl = document.getElementById("statusGenerarInforme");
+  if (!fechaDesde || !fechaHasta) {
+    mostrarToast("Elige la fecha de inicio y de fin del periodo", true);
+    return;
+  }
+  if (fechaHasta < fechaDesde) {
+    mostrarToast("La fecha final no puede ser anterior a la fecha de inicio", true);
+    return;
+  }
+  if (tipoInforme === "Parcial" && !numeroParcial) {
+    mostrarToast("Escribe el número de informe parcial", true);
+    return;
+  }
+  const btn = document.getElementById("btnGenerarInformeDocx");
+  btn.disabled = true;
+  btn.textContent = "Generando...";
+  statusEl.textContent = "Calculando balance y armando el documento, puede tardar unos segundos...";
+  statusEl.style.color = "var(--muted)";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/generar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fechaDesde, fechaHasta, tipoInforme, numeroParcial }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Error al generar el informe");
+    }
+    const blob = await res.blob();
+    const nombre = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nombre ? nombre[1] : "Informe.docx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = "✓ Informe generado y descargado.";
+    statusEl.style.color = "var(--green)";
+    cargarHistorialInformes();
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+    statusEl.style.color = "#C0392B";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "📄 Generar y descargar";
   }
 });
 
