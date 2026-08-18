@@ -664,7 +664,7 @@ function calcularResumenInforme_(body) {
   // (cualquier fecha hasta fechaHasta inclusive, sin importar cuando empezo).
   var ejecutadoPeriodo = {}, ejecutadoAcumulado = {};
   filasMemoria.forEach(function (r) {
-    var fechaMedida = String(r[1] || "").slice(0, 10);
+    var fechaMedida = String(valorPlano_(r[1]) || "").slice(0, 10);
     if (!fechaMedida) return;
     var tipo = tipoUnidad_(r[5]);
     var m = { longitud: r[6], ancho: r[7], alto: r[8], volumen: r[9], distanciaKm: r[10], cantidad: r[11] };
@@ -718,7 +718,7 @@ function calcularResumenInforme_(body) {
   // agrupadas luego por direccion/item en el generador del Word.
   var fotos = [];
   filasMemoria.forEach(function (r) {
-    var fechaMedida = String(r[1] || "").slice(0, 10);
+    var fechaMedida = String(valorPlano_(r[1]) || "").slice(0, 10);
     if (fechaMedida < fechaDesde || fechaMedida > fechaHasta) return;
     separarFotos_(r[12]).forEach(function (url) {
       fotos.push({ direccion: r[2], item: r[3], descripcion: r[4], fotoUrl: url, fecha: fechaMedida });
