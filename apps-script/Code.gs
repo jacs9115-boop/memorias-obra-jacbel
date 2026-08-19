@@ -706,7 +706,7 @@ function calcularResumenInforme_(body) {
     totalEjecutadoAcumuladoVr += vrAcumulado;
     if (cantidadContratada || cantPeriodo || cantAcumulado) {
       items.push({
-        direccion: r[0], item: item, descripcion: normalizarTexto_(r[3]), unidad: normalizarTexto_(r[4]),
+        direccion: r[0], capitulo: normalizarTexto_(r[1]), item: item, descripcion: normalizarTexto_(r[3]), unidad: normalizarTexto_(r[4]),
         cantidadContratada: cantidadContratada, vrUnitario: vrUnitario,
         cantidadEjecutadaPeriodo: cantPeriodo, vrEjecutadoPeriodo: vrPeriodo,
         cantidadEjecutadaAcumulada: cantAcumulado, vrEjecutadoAcumulado: vrAcumulado,

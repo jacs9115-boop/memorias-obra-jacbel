@@ -306,6 +306,65 @@ async function leerDocumentoInformeConIA_(tipo, base64Data, mediaType) {
   return { extraido: ultimoExtraido, necesitaRevision: true };
 }
 
+// Texto (no vision) con el mismo esquema de reintento: Haiku primero, y si
+// no responde nada usable se reintenta con Sonnet.
+async function generarTextoConIA_(prompt, maxTokens) {
+  const intentos = [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
+  for (let i = 0; i < intentos.length; i++) {
+    try {
+      const message = await anthropic.messages.create({
+        model: intentos[i],
+        max_tokens: maxTokens || 600,
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      });
+      const textBlock = message.content.find((b) => b.type === "text");
+      if (textBlock && textBlock.text.trim()) return textBlock.text.trim();
+    } catch (err) {
+      console.error(`Generacion de texto IA fallo con modelo ${intentos[i]}:`, err.message);
+    }
+  }
+  return "";
+}
+
+// "1. Descripción de la necesidad": un parrafo generado a partir del
+// objeto del contrato -- que necesidad origino el proyecto y que se
+// soluciona con su ejecucion. Si la IA no responde nada usable (sin
+// API key configurada, error de red, etc.), se deja un texto neutro para
+// completar a mano en vez de dejar la seccion vacia o romper la
+// generacion del informe.
+async function generarDescripcionNecesidad_(objeto) {
+  const prompt = `Eres un ingeniero que redacta informes de obra pública en Colombia. Con base UNICAMENTE en el siguiente objeto contractual, escribe UN SOLO PÁRRAFO (sin título, sin viñetas, sin encabezados) que describa la necesidad que dio origen al proyecto y qué problema se soluciona con su ejecución. Sé concreto y técnico; no inventes cifras, fechas ni datos que no se puedan inferir razonablemente del objeto.\n\nObjeto del contrato: "${objeto || ""}"`;
+  const texto = await generarTextoConIA_(prompt, 500);
+  return texto || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
+}
+
+// "2. Resumen de actividades ejecutadas": en vez de solo listar
+// "Item X — descripcion: cantidad unidad", se le pide a la IA una
+// descripcion breve de COMO se ejecuto cada actividad en campo, en base a
+// su nombre/descripcion tecnica -- un solo llamado por informe (no uno
+// por item) para no disparar decenas de llamados a la API. Si la IA no
+// responde un JSON valido o con la cantidad correcta de elementos, se usa
+// la descripcion original del presupuesto tal cual (nunca se deja el
+// informe sin texto por esto).
+async function generarDescripcionesActividades_(items) {
+  if (!items.length) return items;
+  const lista = items.map((it, i) => `${i + 1}. Item ${it.item} (${it.unidad}): ${it.descripcion}`).join("\n");
+  const prompt = `Eres un ingeniero que redacta el informe de un contratista de obra pública en Colombia. Para cada actividad de la siguiente lista, escribe una descripción breve (1 a 2 frases) de CÓMO se ejecutó esa actividad en campo, basándote en su nombre/descripción técnica y su unidad de medida. No inventes cantidades, fechas ni ubicaciones -- describe el procedimiento constructivo de forma general y técnica.\n\nActividades:\n${lista}\n\nResponde UNICAMENTE con un JSON array de ${items.length} strings, en el mismo orden, sin texto adicional. Ejemplo de forma: ["descripción de la actividad 1", "descripción de la actividad 2", ...]`;
+  const texto = await generarTextoConIA_(prompt, 4000);
+  const jsonMatch = texto.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const arr = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(arr) && arr.length === items.length) {
+        return items.map((it, i) => Object.assign({}, it, { descripcionEjecucion: String(arr[i] || it.descripcion) }));
+      }
+    } catch (err) {
+      console.error("No se pudo parsear la descripcion de actividades generada por IA:", err.message);
+    }
+  }
+  return items.map((it) => Object.assign({}, it, { descripcionEjecucion: it.descripcion }));
+}
+
 // ---------- Informe de Supervision (AP2-FO-024) ----------
 
 app.get("/api/obras/:obraId/informe-supervision", async (req, res) => {
@@ -399,12 +458,20 @@ app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
 
     const valorContrato = Number(datos.valorInicial) || 0;
     const porcentajeAnticipo = Number(datos.porcentajeAnticipo) || 0;
+    const valorAnticipoPagado = Number(datos.valorAnticipo) || 0;
     const valorActaPeriodo = resumen.totalEjecutadoPeriodoVr || 0;
     const amortizacionAnticipo = valorActaPeriodo * (porcentajeAnticipo / 100);
     const acumuladoEjecutado = resumen.totalEjecutadoAcumuladoVr || 0;
+    // Amortizacion ACUMULADA (no solo la de este periodo): se calcula
+    // directo del acumulado ejecutado a la fecha, asi no hace falta llevar
+    // un historial aparte de cuanto se amortizo en cada acta anterior --
+    // el mismo % de anticipo aplicado al acumulado ejecutado ya da el
+    // total amortizado hasta hoy.
+    const amortizacionAcumulada = Math.min(valorAnticipoPagado, acumuladoEjecutado * (porcentajeAnticipo / 100));
+    const pctAmortizado = valorAnticipoPagado > 0 ? (amortizacionAcumulada / valorAnticipoPagado) * 100 : 0;
     const balance = {
       valorContrato,
-      valorAnticipoPagado: Number(datos.valorAnticipo) || 0,
+      valorAnticipoPagado,
       porcentajeAnticipo,
       valorActaPeriodo,
       amortizacionAnticipo,
@@ -412,10 +479,19 @@ app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
       acumuladoEjecutado,
       saldoPorEjecutar: Math.max(0, valorContrato - acumuladoEjecutado),
       saldoAFavor: Math.max(0, acumuladoEjecutado - valorContrato),
+      amortizacionAcumulada,
+      pctAmortizado,
+      pctPendienteAmortizar: 100 - pctAmortizado,
       tipoInforme, numeroParcial: numeroParcial || "",
     };
 
-    const doc = await generarInformeContratistaDocx(datos, balance, resumen.items || [], resumen.fotos || []);
+    const [descripcionNecesidad, itemsConDescripcion] = await Promise.all([
+      generarDescripcionNecesidad_(datos.objeto),
+      generarDescripcionesActividades_(resumen.items || []),
+    ]);
+    datos.descripcionNecesidad = descripcionNecesidad;
+
+    const doc = await generarInformeContratistaDocx(datos, balance, itemsConDescripcion, resumen.fotos || []);
     const buffer = await Packer.toBuffer(doc);
     const nombreArchivo = `Informe ${tipoInforme === "Final" ? "Final" : "Parcial " + (numeroParcial || "")} - ${datos.numeroContrato || obraId} - ${fechaHasta}.docx`.replace(/\s+/g, " ");
 

@@ -113,7 +113,12 @@ function bloqueEncabezado(datos) {
   ];
 }
 
-// ---------- 1. Informacion del contrato ----------
+// ---------- 1. Descripcion de la necesidad (generada por IA) ----------
+function seccionNecesidad(datos) {
+  return [parrafo(datos.descripcionNecesidad || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]")];
+}
+
+// ---------- 2. Informacion del contrato ----------
 function tablaInfoContrato(datos) {
   const filas = [
     ["Contrato de Obra No.", datos.numeroContrato],
@@ -138,10 +143,12 @@ function tablaInfoContrato(datos) {
   });
 }
 
-// ---------- 2. Resumen de actividades ejecutadas ----------
-// Narrativo, no tabla: lista las actividades (items) que se estan
-// cobrando en el periodo de este acta -- es decir, los items del
-// presupuesto con cantidad ejecutada > 0 dentro del rango de fechas.
+// ---------- 3. Resumen de actividades ejecutadas ----------
+// Narrativo: lista las actividades (items) que se estan cobrando en el
+// periodo de este acta -- los items del presupuesto con cantidad
+// ejecutada > 0 dentro del rango de fechas -- usando la descripcion de
+// COMO se ejecuto cada una (generada por IA en server.js;
+// "descripcionEjecucion") en vez del simple nombre del item.
 function resumenActividadesNarrativo(items) {
   const delPeriodo = (items || []).filter((it) => Number(it.cantidadEjecutadaPeriodo) > 0);
   if (!delPeriodo.length) {
@@ -153,7 +160,7 @@ function resumenActividadesNarrativo(items) {
       indent: { left: 300 },
       spacing: { after: 80 },
       children: [new TextRun({
-        text: `- Item ${it.item} — ${it.descripcion}: ${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}`,
+        text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
         size: 20,
       })],
     }));
@@ -161,7 +168,109 @@ function resumenActividadesNarrativo(items) {
   return bloques;
 }
 
-// ---------- 3. Balance financiero ----------
+// Cuadro de avance en PORCENTAJE (no cantidad): Contratado siempre es
+// 100% (es la base contra la que se miden los demas); si un item no tiene
+// cantidad contratada (agregado desde la app, sin match en el
+// presupuesto oficial) no se puede calcular % sobre una base de 0, se deja
+// "-" en vez de una division por cero.
+function pctStr(numerador, base) {
+  if (!base) return "-";
+  return `${fmtNum((Number(numerador || 0) / base) * 100)}%`;
+}
+
+function tablaResumenPorcentaje(items) {
+  const header = new TableRow({
+    tableHeader: true,
+    children: [
+      celda("Item", { width: 700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Descripción", { width: 3700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF" }),
+      celda("Contratado", { width: 1250, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Ejecutado este periodo", { width: 1450, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Ejecutado acumulado", { width: 1450, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Saldo por ejecutar", { width: 1350, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+    ],
+  });
+  const filas = (items || []).map((it) => {
+    const contratada = Number(it.cantidadContratada || 0);
+    const pctAcumulado = contratada ? (Number(it.cantidadEjecutadaAcumulada || 0) / contratada) * 100 : null;
+    return new TableRow({
+      children: [
+        celda(it.item, { width: 700, align: AlignmentType.CENTER }),
+        celda(it.descripcion, { width: 3700 }),
+        celda(contratada ? "100%" : "-", { width: 1250, align: AlignmentType.CENTER }),
+        celda(pctStr(it.cantidadEjecutadaPeriodo, contratada), { width: 1450, align: AlignmentType.CENTER }),
+        celda(pctStr(it.cantidadEjecutadaAcumulada, contratada), { width: 1450, align: AlignmentType.CENTER }),
+        celda(pctAcumulado == null ? "-" : `${fmtNum(Math.max(0, 100 - pctAcumulado))}%`, { width: 1350, align: AlignmentType.CENTER }),
+      ],
+    });
+  });
+  return new Table({
+    width: { size: 9900, type: WidthType.DXA },
+    columnWidths: [700, 3700, 1250, 1450, 1450, 1350],
+    rows: [header].concat(filas),
+  });
+}
+
+// "Grafica" de avance por capitulo dentro de cada direccion: una barra de
+// progreso hecha con caracteres de bloque (texto, no imagen) -- se evita
+// a proposito depender de una libreria de graficos con bindings nativos
+// (fragil de instalar en el build de Render) o de un servicio externo de
+// graficas (enviaria datos del proyecto a un tercero); esto siempre
+// renderiza bien en Word sin dependencias extra. El avance se calcula por
+// VALOR (cantidad x vr. unitario), no por cantidad cruda, porque un mismo
+// capitulo mezcla items con distintas unidades (M2, M3, Un...) que no se
+// pueden sumar directamente.
+function barraTexto(pct) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const llenos = Math.round((p / 100) * 20);
+  return "█".repeat(llenos) + "░".repeat(20 - llenos);
+}
+
+function avancePorCapituloYDireccion(items) {
+  const porDireccion = {};
+  const ordenDireccion = [];
+  (items || []).forEach((it) => {
+    const direccion = it.direccion || "(sin dirección)";
+    const capitulo = it.capitulo || "(sin capítulo)";
+    if (!porDireccion[direccion]) { porDireccion[direccion] = {}; ordenDireccion.push(direccion); }
+    if (!porDireccion[direccion][capitulo]) porDireccion[direccion][capitulo] = { vrContratado: 0, vrEjecutado: 0 };
+    porDireccion[direccion][capitulo].vrContratado += Number(it.cantidadContratada || 0) * Number(it.vrUnitario || 0);
+    porDireccion[direccion][capitulo].vrEjecutado += Number(it.vrEjecutadoAcumulado || 0);
+  });
+  return ordenDireccion
+    .map((direccion) => ({
+      direccion,
+      capitulos: Object.keys(porDireccion[direccion])
+        .filter((capitulo) => porDireccion[direccion][capitulo].vrContratado > 0)
+        .map((capitulo) => {
+          const c = porDireccion[direccion][capitulo];
+          return { capitulo, pct: (c.vrEjecutado / c.vrContratado) * 100 };
+        }),
+    }))
+    .filter((g) => g.capitulos.length);
+}
+
+function seccionAvancePorDireccion(items) {
+  const grupos = avancePorCapituloYDireccion(items);
+  if (!grupos.length) return [];
+  const bloques = [parrafo("Avance de ejecución acumulado por capítulo, dentro de cada dirección/frente de obra (calculado sobre el valor, no la cantidad, de cada actividad):", { after: 140 })];
+  grupos.forEach((g) => {
+    bloques.push(new Paragraph({ spacing: { before: 160, after: 60 }, children: [new TextRun({ text: g.direccion, bold: true, size: 20 })] }));
+    g.capitulos.forEach((c) => {
+      bloques.push(new Paragraph({
+        indent: { left: 200 },
+        spacing: { after: 40 },
+        children: [
+          new TextRun({ text: barraTexto(c.pct), font: "Courier New", size: 18, color: AZUL_OSCURO }),
+          new TextRun({ text: `  ${fmtNum(c.pct)}%  ${c.capitulo}`, size: 18 }),
+        ],
+      }));
+    });
+  });
+  return bloques;
+}
+
+// ---------- 4. Balance financiero ----------
 // SUMAS IGUALES: se arma con "Acumulado ejecutado a la fecha" (no con
 // "Valor Acta del periodo") para que la cuenta cuadre SIEMPRE contra el
 // valor del contrato, sin importar si este es el informe No. 1 o uno
@@ -197,7 +306,29 @@ function tablaBalanceFinanciero(b) {
   });
 }
 
-// ---------- 4. Garantias ----------
+// Amortizacion del anticipo, en porcentaje del anticipo pagado (no del
+// valor del contrato): cuanto ya se descontó de forma acumulada hasta
+// esta acta, y cuanto queda pendiente.
+function tablaAmortizacion(b) {
+  const filas = [
+    ["Valor total del anticipo pagado", fmtCOP(b.valorAnticipoPagado), "100%"],
+    ["Amortizado acumulado a la fecha", fmtCOP(b.amortizacionAcumulada), `${fmtNum(b.pctAmortizado)}%`],
+    ["Pendiente por amortizar", fmtCOP(Math.max(0, b.valorAnticipoPagado - b.amortizacionAcumulada)), `${fmtNum(b.pctPendienteAmortizar)}%`],
+  ];
+  return new Table({
+    width: { size: 9500, type: WidthType.DXA },
+    columnWidths: [5500, 2500, 1500],
+    rows: filas.map(([label, valor, pct]) => new TableRow({
+      children: [
+        celda(label, { width: 5500, bold: true, bg: GRIS_CLARO }),
+        celda(valor, { width: 2500, align: AlignmentType.RIGHT }),
+        celda(pct, { width: 1500, align: AlignmentType.CENTER }),
+      ],
+    })),
+  });
+}
+
+// ---------- 5. Garantias ----------
 function tablaPolizas(datos) {
   const filas = [
     ["Compañía aseguradora", datos.companiaAseguradora],
@@ -239,7 +370,7 @@ function tablaAmparos(amparos) {
   });
 }
 
-// ---------- 6. Cronologia y 7. Registro fotografico ----------
+// ---------- 7. Cronologia y 8. Registro fotografico ----------
 async function descargarImagenDrive_(fotoUrl) {
   const m = (fotoUrl || "").match(/\/d\/([^/]+)\//);
   if (!m) return null;
@@ -288,27 +419,36 @@ async function generarInformeContratistaDocx(datos, balance, items, fotos) {
   const children = [];
   children.push(...bloqueEncabezado(datos));
 
-  children.push(tituloSeccion("1. Información del contrato"));
+  children.push(tituloSeccion("1. Descripción de la necesidad"));
+  children.push(...seccionNecesidad(datos));
+
+  children.push(tituloSeccion("2. Información del contrato"));
   children.push(tablaInfoContrato(datos));
 
-  children.push(tituloSeccion("2. Resumen de actividades ejecutadas"));
+  children.push(tituloSeccion("3. Resumen de actividades ejecutadas"));
   children.push(...resumenActividadesNarrativo(items));
+  children.push(new Paragraph({ spacing: { before: 160, after: 80 }, children: [] }));
+  children.push(tablaResumenPorcentaje(items));
+  children.push(new Paragraph({ spacing: { before: 200, after: 80 }, children: [] }));
+  children.push(...seccionAvancePorDireccion(items));
 
-  children.push(tituloSeccion("3. Balance financiero del contrato"));
+  children.push(tituloSeccion("4. Balance financiero del contrato"));
   children.push(tablaBalanceFinanciero(balance));
+  children.push(new Paragraph({ spacing: { before: 200, after: 80 }, children: [new TextRun({ text: "Amortización del anticipo", bold: true, size: 20 })] }));
+  children.push(tablaAmortizacion(balance));
 
-  children.push(tituloSeccion("4. Seguimiento y control de las garantías exigidas"));
+  children.push(tituloSeccion("5. Seguimiento y control de las garantías exigidas"));
   children.push(tablaPolizas(datos));
   children.push(new Paragraph({ spacing: { before: 160, after: 80 }, children: [] }));
   children.push(tablaAmparos(datos.amparos));
 
-  children.push(tituloSeccion("5. Observaciones"));
+  children.push(tituloSeccion("6. Observaciones"));
   children.push(parrafo("[Agregar aquí observaciones adicionales, si aplica.]", { italic: true }));
 
-  children.push(tituloSeccion("6. Cronología del periodo reportado"));
-  children.push(parrafo(`Durante el periodo comprendido entre el ${fmtFecha(datos.fechaDesde)} y el ${fmtFecha(datos.fechaHasta)}, se ejecutaron las actividades descritas en el numeral 2.`));
+  children.push(tituloSeccion("7. Cronología del periodo reportado"));
+  children.push(parrafo(`Durante el periodo comprendido entre el ${fmtFecha(datos.fechaDesde)} y el ${fmtFecha(datos.fechaHasta)}, se ejecutaron las actividades descritas en el numeral 3.`));
 
-  children.push(tituloSeccion("7. Registro fotográfico"));
+  children.push(tituloSeccion("8. Registro fotográfico"));
   children.push(...(await seccionFotos(fotos)));
 
   children.push(new Paragraph({ spacing: { before: 600 }, children: [] }));
