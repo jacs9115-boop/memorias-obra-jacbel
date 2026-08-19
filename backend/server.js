@@ -333,8 +333,8 @@ async function generarTextoConIA_(prompt, maxTokens) {
 // completar a mano en vez de dejar la seccion vacia o romper la
 // generacion del informe.
 async function generarDescripcionNecesidad_(objeto) {
-  const prompt = `Eres un ingeniero que redacta informes de obra pública en Colombia. Con base UNICAMENTE en el siguiente objeto contractual, escribe UN SOLO PÁRRAFO (sin título, sin viñetas, sin encabezados) que describa la necesidad que dio origen al proyecto y qué problema se soluciona con su ejecución. Sé concreto y técnico; no inventes cifras, fechas ni datos que no se puedan inferir razonablemente del objeto.\n\nObjeto del contrato: "${objeto || ""}"`;
-  const texto = await generarTextoConIA_(prompt, 500);
+  const prompt = `Eres un ingeniero que redacta informes de obra pública en Colombia. Con base UNICAMENTE en el siguiente objeto contractual, escribe una descripción de la necesidad, EXTENSA Y DETALLADA (aproximadamente una página, entre 500 y 700 palabras, en 3 a 5 párrafos separados por una línea en blanco entre cada uno), que cubra: el problema o la situación que dio origen al proyecto, el contexto y las condiciones que hacían necesaria esta intervención, y qué se soluciona concretamente con la ejecución de las obras. No uses título ni viñetas -- solo párrafos de texto corrido. Sé técnico y concreto; no inventes cifras, fechas, nombres de barrios/sectores específicos ni datos que no se puedan inferir razonablemente del objeto -- puedes desarrollar el contexto tecnico/sanitario/de infraestructura de forma general sin inventar hechos puntuales no mencionados.\n\nObjeto del contrato: "${objeto || ""}"`;
+  const texto = await generarTextoConIA_(prompt, 1600);
   return texto || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
 }
 
@@ -460,15 +460,20 @@ app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
     if (!fechaDesde || !fechaHasta) return res.status(400).json({ error: "Falta la fecha de inicio o de fin del periodo" });
     if (tipoInforme !== "Parcial" && tipoInforme !== "Final") return res.status(400).json({ error: "El tipo de informe debe ser Parcial o Final" });
 
-    const [datosInforme, resumen] = await Promise.all([
+    const [datosInforme, resumen, datosObra] = await Promise.all([
       llamarAppsScript(`${APPS_SCRIPT_URL}?informeSupervision=${encodeURIComponent(obraId)}`),
       llamarAppsScriptPost({ accion: "calcular_resumen_informe", obraId, fechaDesde, fechaHasta }),
+      llamarAppsScript(`${APPS_SCRIPT_URL}?obra=${encodeURIComponent(obraId)}`),
     ]);
     if (!datosInforme.ok) return res.status(400).json({ error: datosInforme.error || "No se pudieron leer los datos del informe" });
     if (!resumen.ok) return res.status(400).json({ error: resumen.error || "No se pudo calcular el resumen del periodo" });
 
+    // El supervisor no es un dato del formulario del contratista (Fase 1):
+    // ya vive en la hoja indice de obras desde que la obra se creo, asi que
+    // se toma de ahi (leerObra_) en vez de pedirselo de nuevo al usuario.
     const datos = Object.assign({}, datosInforme.datos, {
       amparos: datosInforme.amparos || [],
+      supervisor: (datosObra && datosObra.obra && datosObra.obra.supervisor) || "",
       tipoInforme, numeroParcial: numeroParcial || "",
       fechaDesde, fechaHasta,
     });

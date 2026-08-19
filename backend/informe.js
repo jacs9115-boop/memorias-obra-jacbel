@@ -92,6 +92,16 @@ function bloqueEncabezado(datos) {
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
+      spacing: { after: 20 },
+      children: [new TextRun({ text: "SUPERVISOR", bold: true, size: 20, color: AZUL_OSCURO })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+      children: [new TextRun({ text: datos.supervisor || "", bold: true, size: 20 })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
       spacing: { after: 60 },
       children: [new TextRun({ text: `CONTRATO DE OBRA No. ${datos.numeroContrato || ""}`, bold: true, size: 22 })],
     }),
@@ -115,7 +125,11 @@ function bloqueEncabezado(datos) {
 
 // ---------- 1. Descripcion de la necesidad (generada por IA) ----------
 function seccionNecesidad(datos) {
-  return [parrafo(datos.descripcionNecesidad || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]")];
+  const texto = datos.descripcionNecesidad || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
+  // El texto largo generado por la IA trae parrafos separados por linea en
+  // blanco -- se respetan como parrafos de Word aparte (un solo TextRun
+  // con "\n" adentro no los separa visualmente).
+  return texto.split(/\n\s*\n/).map((p) => p.trim()).filter((p) => p).map((p) => parrafo(p));
 }
 
 // ---------- 2. Informacion del contrato ----------
@@ -124,6 +138,7 @@ function tablaInfoContrato(datos) {
     ["Contrato de Obra No.", datos.numeroContrato],
     ["Objeto", datos.objeto],
     ["Contratista", datos.contratista],
+    ["Supervisor", datos.supervisor],
     ["Valor inicial", fmtCOP(datos.valorInicial)],
     ["Plazo inicial", datos.plazo],
     ["Fecha Acta de Inicio", fmtFecha(datos.fechaActaInicio)],
@@ -168,45 +183,36 @@ function resumenActividadesNarrativo(items) {
   return bloques;
 }
 
-// Cuadro de avance en PORCENTAJE (no cantidad): Contratado siempre es
-// 100% (es la base contra la que se miden los demas); si un item no tiene
-// cantidad contratada (agregado desde la app, sin match en el
-// presupuesto oficial) no se puede calcular % sobre una base de 0, se deja
-// "-" en vez de una division por cero.
-function pctStr(numerador, base) {
-  if (!base) return "-";
-  return `${fmtNum((Number(numerador || 0) / base) * 100)}%`;
-}
-
-function tablaResumenPorcentaje(items) {
+// Cuadro de avance por CANTIDAD (no porcentaje) -- el porcentaje ya se ve
+// en el panel de barras por direccion/capitulo mas abajo, asi que este
+// cuadro vuelve a mostrar los numeros crudos de cada item.
+function tablaResumenActividades(items) {
   const header = new TableRow({
     tableHeader: true,
     children: [
       celda("Item", { width: 700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Descripción", { width: 3700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF" }),
-      celda("Contratado", { width: 1250, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Ejecutado este periodo", { width: 1450, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Ejecutado acumulado", { width: 1450, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
-      celda("Saldo por ejecutar", { width: 1350, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Descripción", { width: 3400, bold: true, bg: AZUL_OSCURO, color: "FFFFFF" }),
+      celda("Und.", { width: 700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Cant. contratada", { width: 1200, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Ejecutado este periodo", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Ejecutado acumulado", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Saldo por ejecutar", { width: 1300, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
     ],
   });
-  const filas = (items || []).map((it) => {
-    const contratada = Number(it.cantidadContratada || 0);
-    const pctAcumulado = contratada ? (Number(it.cantidadEjecutadaAcumulada || 0) / contratada) * 100 : null;
-    return new TableRow({
-      children: [
-        celda(it.item, { width: 700, align: AlignmentType.CENTER }),
-        celda(it.descripcion, { width: 3700 }),
-        celda(contratada ? "100%" : "-", { width: 1250, align: AlignmentType.CENTER }),
-        celda(pctStr(it.cantidadEjecutadaPeriodo, contratada), { width: 1450, align: AlignmentType.CENTER }),
-        celda(pctStr(it.cantidadEjecutadaAcumulada, contratada), { width: 1450, align: AlignmentType.CENTER }),
-        celda(pctAcumulado == null ? "-" : `${fmtNum(Math.max(0, 100 - pctAcumulado))}%`, { width: 1350, align: AlignmentType.CENTER }),
-      ],
-    });
-  });
+  const filas = (items || []).map((it) => new TableRow({
+    children: [
+      celda(it.item, { width: 700, align: AlignmentType.CENTER }),
+      celda(it.descripcion, { width: 3400 }),
+      celda(it.unidad, { width: 700, align: AlignmentType.CENTER }),
+      celda(fmtNum(it.cantidadContratada), { width: 1200, align: AlignmentType.CENTER }),
+      celda(fmtNum(it.cantidadEjecutadaPeriodo), { width: 1300, align: AlignmentType.CENTER }),
+      celda(fmtNum(it.cantidadEjecutadaAcumulada), { width: 1300, align: AlignmentType.CENTER }),
+      celda(fmtNum(Math.max(0, Number(it.cantidadContratada || 0) - Number(it.cantidadEjecutadaAcumulada || 0))), { width: 1300, align: AlignmentType.CENTER }),
+    ],
+  }));
   return new Table({
     width: { size: 9900, type: WidthType.DXA },
-    columnWidths: [700, 3700, 1250, 1450, 1450, 1350],
+    columnWidths: [700, 3400, 700, 1200, 1300, 1300, 1300],
     rows: [header].concat(filas),
   });
 }
@@ -581,7 +587,7 @@ async function generarInformeContratistaDocx(datos, balance, items, fotos) {
   children.push(tituloSeccion("3. Resumen de actividades ejecutadas"));
   children.push(...resumenActividadesNarrativo(items));
   children.push(new Paragraph({ spacing: { before: 160, after: 80 }, children: [] }));
-  children.push(tablaResumenPorcentaje(items));
+  children.push(tablaResumenActividades(items));
   children.push(new Paragraph({ spacing: { before: 200, after: 80 }, children: [] }));
   children.push(...seccionAvancePorDireccion(items));
 
