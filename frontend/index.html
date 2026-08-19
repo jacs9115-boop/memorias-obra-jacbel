@@ -47,9 +47,9 @@
   .empty { text-align: center; color: var(--muted); padding: 20px; font-size: 13.5px; }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
-  select, input[type="text"], input[type="number"], input[type="file"] {
+  select, input[type="text"], input[type="number"], input[type="file"], textarea {
     width: 100%; border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px; font-size: 15px; background: var(--card); color: var(--text); font-family: inherit; }
+    padding: 12px; font-size: 15px; background: var(--card); color: var(--text); font-family: inherit; box-sizing: border-box; resize: vertical; }
   .btn-primary { width: 100%; padding: 15px; border: none; border-radius: 12px;
     background: var(--navy); color: #fff; font-weight: 700; font-size: 16px; margin-top: 6px; }
   .btn-primary:disabled { opacity: 0.4; }
@@ -283,6 +283,24 @@
     </div>
 
     <div class="card">
+      <h2>Datos del supervisor</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px;text-align:left">
+        Solo hacen falta si vas a generar el Informe de Supervisión (además del nombre del supervisor, que ya viene de los datos generales de la obra).
+      </div>
+      <div class="field"><label>Cargo del supervisor</label><input type="text" id="infSupervisorCargo" placeholder="Ej: Profesional III" /></div>
+      <div class="field"><label>Designación del supervisor (opcional)</label><input type="text" id="infSupervisorDesignacion" placeholder="Ej: Memorando N° 12345, DD de MES de AAAA" /></div>
+      <div class="field"><label>Observaciones (opcional)</label><textarea id="infObservacionesSupervisor" rows="3" placeholder="Se deja en blanco para completarla manualmente en el Word"></textarea></div>
+    </div>
+
+    <div class="card">
+      <h2>Actividades generales del contrato</h2>
+      <div class="empty" style="padding:0 0 10px;font-size:12.5px;text-align:left">
+        Solo para el Informe de Supervisión: marca cuáles de estas actas ya ocurrieron, con su fecha.
+      </div>
+      <div id="listaEventosContrato"></div>
+    </div>
+
+    <div class="card">
       <h2>Pólizas</h2>
       <div class="field"><label>N° póliza de cumplimiento</label><input type="text" id="infPolizaCumplimiento" /></div>
       <div class="field"><label>N° póliza de responsabilidad civil extracontractual</label><input type="text" id="infPolizaRCE" /></div>
@@ -317,9 +335,13 @@
         </select>
       </div>
       <div class="field" id="campoNumeroParcialWrap"><label>N° de parcial</label><input type="number" min="1" step="1" id="genNumeroParcial" /></div>
-      <button type="button" class="btn-primary" id="btnGenerarInformeDocx">📄 Generar y descargar</button>
+      <button type="button" class="btn-primary" id="btnGenerarInformeDocx">📄 Generar Informe del Contratista</button>
       <div class="status" id="statusGenerarInforme"></div>
       <div id="historialInformes" style="margin-top:10px"></div>
+      <hr style="margin:18px 0;border:none;border-top:1px solid var(--border)" />
+      <button type="button" class="btn-primary" id="btnGenerarInformeSupervisorDocx">📄 Generar Informe del Supervisor</button>
+      <div class="status" id="statusGenerarInformeSupervisor"></div>
+      <div id="historialInformesSupervisor" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -1400,7 +1422,17 @@ const CAMPO_A_INPUT_INFORME = {
   polizaCumplimiento: "infPolizaCumplimiento", polizaResponsabilidadCivil: "infPolizaRCE",
   companiaAseguradora: "infCompaniaAseguradora",
   porcentajeAnticipo: "infPorcentajeAnticipo", valorAnticipo: "infValorAnticipo",
+  supervisorCargo: "infSupervisorCargo", supervisorDesignacion: "infSupervisorDesignacion",
+  observacionesSupervisor: "infObservacionesSupervisor",
 };
+// Los 8 tipos de "acta" del formato AP2-FO-024 (Informe de Supervisión) --
+// mismo orden y nombres que EVENTOS_CONTRATO_DEFAULT_ en
+// backend/informe-supervisor.js.
+const EVENTOS_CONTRATO_DEFAULT = [
+  "Reunión visita previa al sitio de la obra", "Reunión en las oficinas del Municipio",
+  "Iniciación", "Suspensión", "Reinicio", "Recibo", "Liquidación", "Otros",
+];
+let eventosActuales = [];
 const TIPO_A_CAMPO_URL_ADJUNTO = {
   acta_inicio: "urlActaInicio", polizas: "urlPolizas", contrato: "urlContrato", comprobante_anticipo: "urlComprobanteAnticipo",
 };
@@ -1435,18 +1467,48 @@ async function cargarInformeSupervision() {
     });
     amparosActuales = (data.amparos || []).map((a) => Object.assign({}, a));
     renderAmparos();
+    try {
+      eventosActuales = JSON.parse(datos.eventosContratoJson || "[]");
+    } catch (e) { eventosActuales = []; }
+    if (!eventosActuales.length) {
+      eventosActuales = EVENTOS_CONTRATO_DEFAULT.map((evento) => ({ evento, ocurrio: false, fecha: "", observaciones: "" }));
+    }
+    renderEventosContrato();
   } catch (err) {
     statusInforme.textContent = "No se pudieron cargar datos previos: " + err.message;
     statusInforme.style.color = "#C0392B";
   }
-  cargarHistorialInformes();
+  cargarHistorialInformes("contratista", "historialInformes", "genNumeroParcial");
+  cargarHistorialInformes("supervisor", "historialInformesSupervisor", null);
 }
 
-async function cargarHistorialInformes() {
-  const cont = document.getElementById("historialInformes");
-  const campoParcial = document.getElementById("genNumeroParcial");
+function renderEventosContrato() {
+  const cont = document.getElementById("listaEventosContrato");
+  cont.innerHTML = eventosActuales.map((e, i) => `
+    <div class="evento-row" data-idx="${i}" style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">${e.evento}</div>
+      <label style="font-size:12.5px;margin-right:14px"><input type="checkbox" class="eventoOcurrio" data-idx="${i}" ${e.ocurrio ? "checked" : ""} /> Ocurrió</label>
+      <div class="field" style="margin-top:6px"><label>Fecha</label><input type="date" class="eventoFecha" data-idx="${i}" value="${e.fecha || ""}" /></div>
+      <div class="field"><label>Observaciones</label><input type="text" class="eventoObs" data-idx="${i}" value="${(e.observaciones || "").toString().replace(/"/g, "&quot;")}" /></div>
+    </div>
+  `).join("");
+}
+
+function leerEventosDesdeFormulario() {
+  const filas = document.querySelectorAll("#listaEventosContrato .evento-row");
+  eventosActuales = Array.from(filas).map((fila, i) => ({
+    evento: eventosActuales[i] ? eventosActuales[i].evento : EVENTOS_CONTRATO_DEFAULT[i],
+    ocurrio: fila.querySelector(".eventoOcurrio").checked,
+    fecha: fila.querySelector(".eventoFecha").value,
+    observaciones: fila.querySelector(".eventoObs").value.trim(),
+  }));
+}
+
+async function cargarHistorialInformes(tipoDocumento, contenedorId, campoParcialId) {
+  const cont = document.getElementById(contenedorId);
+  const campoParcial = campoParcialId ? document.getElementById(campoParcialId) : null;
   try {
-    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/historial`);
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/historial?tipoDocumento=${tipoDocumento}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Error al cargar el historial");
     if (campoParcial && !campoParcial.value) campoParcial.value = data.siguienteParcialSugerido || 1;
@@ -1462,7 +1524,7 @@ async function cargarHistorialInformes() {
             ${h.tipo === "Final" ? "Final" : "Parcial No. " + h.numeroParcial} — ${h.fechaDesde} a ${h.fechaHasta}
             ${h.urlDocx ? `— <a href="${h.urlDocx}" target="_blank" rel="noopener">ver / descargar</a>` : ""}
           </span>
-          <button type="button" title="Eliminar este informe" onclick="borrarInformeDelHistorial('${h.fechaGeneracion}')" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 6px;flex-shrink:0">🗑️</button>
+          <button type="button" title="Eliminar este informe" onclick="borrarInformeDelHistorial('${h.fechaGeneracion}', '${tipoDocumento}', '${contenedorId}', ${campoParcialId ? `'${campoParcialId}'` : "null"})" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 6px;flex-shrink:0">🗑️</button>
         </div>
       `).join("");
   } catch (err) {
@@ -1470,13 +1532,13 @@ async function cargarHistorialInformes() {
   }
 }
 
-async function borrarInformeDelHistorial(fechaGeneracion) {
+async function borrarInformeDelHistorial(fechaGeneracion, tipoDocumento, contenedorId, campoParcialId) {
   if (!confirm("¿Eliminar este informe generado? También se manda a la papelera el archivo .docx en Drive. Esto no borra los datos de la obra, solo este documento ya generado.")) return;
   try {
     const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/historial/${encodeURIComponent(fechaGeneracion)}`, { method: "DELETE" });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Error al eliminar el informe");
-    cargarHistorialInformes();
+    cargarHistorialInformes(tipoDocumento, contenedorId, campoParcialId);
   } catch (err) {
     mostrarToast(err.message || "Error al eliminar el informe", true);
   }
@@ -1610,10 +1672,12 @@ document.querySelectorAll(".inputAdjuntoInforme").forEach((input) => {
 document.getElementById("btnGuardarDatosInforme").addEventListener("click", async () => {
   if (!obraActual) return;
   leerAmparosDesdeFormulario();
+  leerEventosDesdeFormulario();
   const datos = {};
   Object.keys(CAMPO_A_INPUT_INFORME).forEach((campo) => {
     datos[campo] = document.getElementById(CAMPO_A_INPUT_INFORME[campo]).value.trim();
   });
+  datos.eventosContratoJson = JSON.stringify(eventosActuales);
   const btn = document.getElementById("btnGuardarDatosInforme");
   btn.disabled = true;
   btn.textContent = "Guardando...";
@@ -1684,13 +1748,68 @@ document.getElementById("btnGenerarInformeDocx").addEventListener("click", async
     URL.revokeObjectURL(url);
     statusEl.textContent = "✓ Informe generado y descargado.";
     statusEl.style.color = "var(--green)";
-    cargarHistorialInformes();
+    cargarHistorialInformes("contratista", "historialInformes", "genNumeroParcial");
   } catch (err) {
     statusEl.textContent = "Error: " + err.message;
     statusEl.style.color = "#C0392B";
   } finally {
     btn.disabled = false;
-    btn.textContent = "📄 Generar y descargar";
+    btn.textContent = "📄 Generar Informe del Contratista";
+  }
+});
+
+document.getElementById("btnGenerarInformeSupervisorDocx").addEventListener("click", async () => {
+  if (!obraActual) return;
+  const fechaDesde = document.getElementById("genFechaDesde").value;
+  const fechaHasta = document.getElementById("genFechaHasta").value;
+  const tipoInforme = document.getElementById("genTipoInforme").value;
+  const numeroParcial = document.getElementById("genNumeroParcial").value.trim();
+  const statusEl = document.getElementById("statusGenerarInformeSupervisor");
+  if (!fechaDesde || !fechaHasta) {
+    mostrarToast("Elige la fecha de inicio y de fin del periodo", true);
+    return;
+  }
+  if (fechaHasta < fechaDesde) {
+    mostrarToast("La fecha final no puede ser anterior a la fecha de inicio", true);
+    return;
+  }
+  if (tipoInforme === "Parcial" && !numeroParcial) {
+    mostrarToast("Escribe el número de informe parcial", true);
+    return;
+  }
+  const btn = document.getElementById("btnGenerarInformeSupervisorDocx");
+  btn.disabled = true;
+  btn.textContent = "Generando...";
+  statusEl.textContent = "Calculando balance y armando el documento, puede tardar unos segundos...";
+  statusEl.style.color = "var(--muted)";
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/generar-supervisor`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fechaDesde, fechaHasta, tipoInforme, numeroParcial }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Error al generar el informe");
+    }
+    const blob = await res.blob();
+    const nombre = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nombre ? nombre[1] : "Informe.docx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = "✓ Informe generado y descargado.";
+    statusEl.style.color = "var(--green)";
+    cargarHistorialInformes("supervisor", "historialInformesSupervisor", null);
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+    statusEl.style.color = "#C0392B";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "📄 Generar Informe del Supervisor";
   }
 });
 

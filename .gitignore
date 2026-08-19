@@ -1,0 +1,7 @@
+node_modules/
+.env
+.DS_Store
+# Documento real de otro contrato (VITA CORPORACION, 053-25) usado solo
+# como referencia estructural para el Informe de Supervision -- no es
+# parte de la app y no debe subirse al repo.
+referencia-supervisor/

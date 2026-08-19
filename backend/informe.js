@@ -690,4 +690,15 @@ async function generarInformeContratistaDocx(datos, balance, items, fotos) {
   return doc;
 }
 
-module.exports = { generarInformeContratistaDocx };
+module.exports = {
+  generarInformeContratistaDocx,
+  // Se re-exportan para que informe-supervisor.js (mismo formato AP2-FO-024,
+  // pero para el documento que redacta el SUPERVISOR de Acuavalle) no
+  // duplique estos bloques -- balance financiero, polizas, amparos, fotos y
+  // los formatos/estilos base son identicos en ambos documentos.
+  AZUL_OSCURO, GRIS_CLARO, BORDE, BORDES_CELDA, SIN_BORDE_,
+  fmtCOP, fmtFecha, fmtNum,
+  celda, tituloSeccion, parrafo,
+  tablaBalanceFinanciero, tablaAmortizacion, tablaPolizas, tablaAmparos,
+  descargarImagenDrive_, seccionFotos,
+};

@@ -6,6 +6,7 @@ const multer = require("multer");
 const Anthropic = require("@anthropic-ai/sdk");
 const { Packer } = require("docx");
 const { generarInformeContratistaDocx } = require("./informe");
+const { generarInformeSupervisorDocx } = require("./informe-supervisor");
 
 const PORT = process.env.PORT || 3000;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
@@ -446,7 +447,8 @@ app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("arc
 app.get("/api/obras/:obraId/informe-supervision/historial", async (req, res) => {
   try {
     requireAppsScriptUrl();
-    const data = await llamarAppsScript(`${APPS_SCRIPT_URL}?historialInformes=${encodeURIComponent(req.params.obraId)}`);
+    const tipoDocumento = req.query.tipoDocumento === "supervisor" ? "supervisor" : "contratista";
+    const data = await llamarAppsScript(`${APPS_SCRIPT_URL}?historialInformes=${encodeURIComponent(req.params.obraId)}&tipoDocumento=${tipoDocumento}`);
     if (data && data.error) return res.status(400).json({ error: data.error });
     res.json(data);
   } catch (err) {
@@ -549,6 +551,92 @@ app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
       await llamarAppsScriptPost({
         accion: "registrar_informe_generado", obraId, tipo: tipoInforme, numeroParcial: numeroParcial || "",
         fechaDesde, fechaHasta, urlDocx: subida.url,
+      });
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombreArchivo.replace(/"/g, "")}"`);
+    if (subida.ok) res.setHeader("X-Informe-Drive-Url", subida.url);
+    res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
+// Genera el .docx del Informe de SUPERVISION (formato AP2-FO-024, con el
+// logo y encabezado institucional reales de Acuavalle): el documento que el
+// usuario, como supervisor de la obra, entrega a la entidad -- se alimenta
+// de la MISMA acta/balance ya calculado para el Informe del Contratista
+// (mismo periodo, mismos items ejecutados), mas los datos propios de
+// supervision (actividades generales SI/NO, cargo/designacion) que se
+// guardan con el mismo mecanismo de "datos del informe" de Fase 1.
+app.post("/api/obras/:obraId/informe-supervision/generar-supervisor", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const obraId = req.params.obraId;
+    const { fechaDesde, fechaHasta, tipoInforme, numeroParcial } = req.body;
+    if (!fechaDesde || !fechaHasta) return res.status(400).json({ error: "Falta la fecha de inicio o de fin del periodo" });
+    if (tipoInforme !== "Parcial" && tipoInforme !== "Final") return res.status(400).json({ error: "El tipo de informe debe ser Parcial o Final" });
+
+    const [datosInforme, resumen, datosObra] = await Promise.all([
+      llamarAppsScript(`${APPS_SCRIPT_URL}?informeSupervision=${encodeURIComponent(obraId)}`),
+      llamarAppsScriptPost({ accion: "calcular_resumen_informe", obraId, fechaDesde, fechaHasta }),
+      llamarAppsScript(`${APPS_SCRIPT_URL}?obra=${encodeURIComponent(obraId)}`),
+    ]);
+    if (!datosInforme.ok) return res.status(400).json({ error: datosInforme.error || "No se pudieron leer los datos del informe" });
+    if (!resumen.ok) return res.status(400).json({ error: resumen.error || "No se pudo calcular el resumen del periodo" });
+
+    let eventosContrato = [];
+    try { eventosContrato = JSON.parse(datosInforme.datos.eventosContratoJson || "[]"); } catch (e) { eventosContrato = []; }
+
+    const datos = Object.assign({}, datosInforme.datos, {
+      amparos: datosInforme.amparos || [],
+      supervisor: (datosObra && datosObra.obra && datosObra.obra.supervisor) || "",
+      eventosContrato,
+      tipoInforme, numeroParcial: numeroParcial || "",
+      fechaDesde, fechaHasta,
+    });
+
+    const valorContrato = Number(datos.valorInicial) || 0;
+    const porcentajeAnticipo = Number(datos.porcentajeAnticipo) || 0;
+    const valorAnticipoPagado = Number(datos.valorAnticipo) || 0;
+    const valorActaPeriodo = resumen.totalEjecutadoPeriodoVr || 0;
+    const amortizacionAnticipo = valorActaPeriodo * (porcentajeAnticipo / 100);
+    const acumuladoEjecutado = resumen.totalEjecutadoAcumuladoVr || 0;
+    const amortizacionAcumulada = Math.min(valorAnticipoPagado, acumuladoEjecutado * (porcentajeAnticipo / 100));
+    const pctAmortizado = valorAnticipoPagado > 0 ? (amortizacionAcumulada / valorAnticipoPagado) * 100 : 0;
+    const balance = {
+      valorContrato,
+      valorAnticipoPagado,
+      porcentajeAnticipo,
+      valorActaPeriodo,
+      amortizacionAnticipo,
+      valorNetoAPagar: valorActaPeriodo - amortizacionAnticipo,
+      acumuladoEjecutado,
+      saldoPorEjecutar: Math.max(0, valorContrato - acumuladoEjecutado),
+      saldoAFavor: Math.max(0, acumuladoEjecutado - valorContrato),
+      amortizacionAcumulada,
+      pctAmortizado,
+      pctPendienteAmortizar: 100 - pctAmortizado,
+      tipoInforme, numeroParcial: numeroParcial || "",
+    };
+
+    // Las descripciones de "como se ejecuto cada actividad" ya se generan
+    // para el informe del contratista con la misma voz de campo (se
+    // instalo/se realizo), que sirve tal cual para la cronologia del
+    // supervisor -- no hace falta pedirselo a la IA dos veces.
+    const itemsConDescripcion = await generarDescripcionesActividades_(resumen.items || []);
+
+    const doc = await generarInformeSupervisorDocx(datos, balance, itemsConDescripcion, resumen.fotos || []);
+    const buffer = await Packer.toBuffer(doc);
+    const nombreArchivo = `Informe Supervision ${tipoInforme === "Final" ? "Final" : "Parcial " + (numeroParcial || "")} - ${datos.numeroContrato || obraId} - ${fechaHasta}.docx`.replace(/\s+/g, " ");
+
+    const subida = await llamarAppsScriptPost({ accion: "subir_informe_generado", obraId, base64: buffer.toString("base64"), nombre: nombreArchivo });
+    if (subida.ok) {
+      await llamarAppsScriptPost({
+        accion: "registrar_informe_generado", obraId, tipo: tipoInforme, numeroParcial: numeroParcial || "",
+        fechaDesde, fechaHasta, urlDocx: subida.url, tipoDocumento: "supervisor",
       });
     }
 

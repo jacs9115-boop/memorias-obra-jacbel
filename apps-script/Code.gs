@@ -9,7 +9,7 @@ function doGet(e) {
     if (e.parameter.previsualizar) return jsonOutput_(parsearPresupuesto_(e.parameter.previsualizar));
     if (e.parameter.obra) return jsonOutput_(leerObra_(e.parameter.obra));
     if (e.parameter.informeSupervision) return jsonOutput_(obtenerDatosInforme_(e.parameter.informeSupervision));
-    if (e.parameter.historialInformes) return jsonOutput_(listarHistorialInformes_(e.parameter.historialInformes));
+    if (e.parameter.historialInformes) return jsonOutput_(listarHistorialInformes_(e.parameter.historialInformes, e.parameter.tipoDocumento));
     return jsonOutput_({ error: "Parametro no reconocido" });
   } catch (err) {
     return jsonOutput_({ error: String(err) });
@@ -34,6 +34,7 @@ function doPost(e) {
     if (body.accion === "calcular_resumen_informe") return jsonOutput_(calcularResumenInforme_(body));
     if (body.accion === "registrar_informe_generado") return jsonOutput_(registrarInformeGenerado_(body));
     if (body.accion === "subir_informe_generado") return jsonOutput_(subirInformeGeneradoDocx_(body));
+    if (body.accion === "borrar_informe_generado") return jsonOutput_(borrarInformeGenerado_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -421,6 +422,12 @@ var CAMPOS_INFORME_SUPERVISION_ = [
   "polizaCumplimiento", "polizaResponsabilidadCivil", "companiaAseguradora",
   "porcentajeAnticipo", "valorAnticipo",
   "urlActaInicio", "urlPolizas", "urlContrato", "urlComprobanteAnticipo",
+  // Propios del Informe de Supervision (AP2-FO-024) -- guardarDatosInforme_
+  // ya acepta cualquier clave nueva sin que haga falta tocar mas codigo
+  // aparte de esta lista (solo se usa para el orden en que quedan escritos
+  // en la hoja); eventosContratoJson guarda como texto un JSON con la
+  // tabla de "actividades generales" (SI/NO + fecha + observaciones).
+  "supervisorCargo", "supervisorDesignacion", "eventosContratoJson", "observacionesSupervisor",
 ];
 
 function hojaInformeSupervision_(ss) {
@@ -591,8 +598,14 @@ function hojaHistorialInformes_(ss) {
   var hoja = ss.getSheetByName("HistorialInformes");
   if (!hoja) {
     hoja = ss.insertSheet("HistorialInformes");
-    hoja.getRange(1, 1, 1, 6).setValues([["FechaGeneracion", "Tipo", "NumeroParcial", "FechaDesde", "FechaHasta", "UrlDocx"]]).setFontWeight("bold");
+    hoja.getRange(1, 1, 1, 7).setValues([["FechaGeneracion", "Tipo", "NumeroParcial", "FechaDesde", "FechaHasta", "UrlDocx", "TipoDocumento"]]).setFontWeight("bold");
     hoja.setFrozenRows(1);
+  } else if (hoja.getRange(1, 7).getValue() !== "TipoDocumento") {
+    // Migracion silenciosa: hojas creadas antes de que existiera el
+    // Informe de Supervision no tenian esta columna -- se agrega el
+    // encabezado sin tocar las filas viejas (se leen como "contratista"
+    // por defecto en leerHistorialInformes_, que es lo que siempre fueron).
+    hoja.getRange(1, 7).setValue("TipoDocumento").setFontWeight("bold");
   }
   return hoja;
 }
@@ -601,12 +614,13 @@ function leerHistorialInformes_(ss) {
   var hoja = hojaHistorialInformes_(ss);
   var lastRow = hoja.getLastRow();
   if (lastRow < 2) return [];
-  return hoja.getRange(2, 1, lastRow - 1, 6).getValues()
+  return hoja.getRange(2, 1, lastRow - 1, 7).getValues()
     .filter(function (r) { return r.some(function (v) { return v !== ""; }); })
     .map(function (r) {
       return {
         fechaGeneracion: valorPlano_(r[0]), tipo: r[1], numeroParcial: r[2],
         fechaDesde: valorPlano_(r[3]), fechaHasta: valorPlano_(r[4]), urlDocx: r[5],
+        tipoDocumento: r[6] || "contratista",
       };
     });
 }
@@ -617,18 +631,49 @@ function registrarInformeGenerado_(body) {
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
   var hoja = hojaHistorialInformes_(ss);
   var fechaGeneracion = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-  var fila = [fechaGeneracion, body.tipo || "", body.numeroParcial || "", body.fechaDesde || "", body.fechaHasta || "", body.urlDocx || ""];
-  hoja.getRange(hoja.getLastRow() + 1, 1, 1, 6).setNumberFormat("@").setValues([fila]);
+  var fila = [fechaGeneracion, body.tipo || "", body.numeroParcial || "", body.fechaDesde || "", body.fechaHasta || "", body.urlDocx || "", body.tipoDocumento || "contratista"];
+  hoja.getRange(hoja.getLastRow() + 1, 1, 1, 7).setNumberFormat("@").setValues([fila]);
   return { ok: true, historial: leerHistorialInformes_(ss) };
 }
 
-function listarHistorialInformes_(obraId) {
+// Borra un renglon del historial (identificado por su FechaGeneracion, que
+// lleva hora:min:seg y es unica por fila) y, de paso, manda a la papelera
+// el .docx correspondiente en Drive -- asi el listado de "informes
+// generados" no se llena de pruebas/versiones viejas que ya no sirven.
+function borrarInformeGenerado_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var hoja = hojaHistorialInformes_(ss);
+  var lastRow = hoja.getLastRow();
+  if (lastRow < 2) return { ok: false, error: "No hay informes en el historial" };
+  var filas = hoja.getRange(2, 1, lastRow - 1, 7).getValues();
+  var idx = -1;
+  for (var i = 0; i < filas.length; i++) {
+    if (String(valorPlano_(filas[i][0])) === String(body.fechaGeneracion)) { idx = i; break; }
+  }
+  if (idx === -1) return { ok: false, error: "No se encontro ese informe en el historial" };
+
+  var urlDocx = filas[idx][5];
+  if (urlDocx) {
+    var m = String(urlDocx).match(/\/d\/([^/]+)/);
+    if (m) {
+      try { DriveApp.getFileById(m[1]).setTrashed(true); } catch (e) { /* si ya no existe, seguimos */ }
+    }
+  }
+  hoja.deleteRow(2 + idx);
+  return { ok: true, historial: leerHistorialInformes_(ss) };
+}
+
+function listarHistorialInformes_(obraId, tipoDocumento) {
   var obra = buscarObra_(obraId);
   if (!obra) return { ok: false, error: "Obra no encontrada" };
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
-  var historial = leerHistorialInformes_(ss);
+  var filtro = tipoDocumento || "contratista";
+  var historial = leerHistorialInformes_(ss).filter(function (h) { return h.tipoDocumento === filtro; });
   // Sugerencia de numero de parcial: 1 + cuantos "Parcial" ya se generaron
-  // (el usuario siempre puede escribir otro numero distinto a mano).
+  // PARA ESTE TIPO DE DOCUMENTO (el informe del contratista y el de
+  // supervision numeran su "Parcial No. X" cada uno por su lado).
   var siguienteParcial = 1 + historial.filter(function (h) { return h.tipo === "Parcial"; }).length;
   return { ok: true, historial: historial, siguienteParcialSugerido: siguienteParcial };
 }
@@ -2138,7 +2183,7 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   filaEnc1[COL.DESC - 1] = "DESCRIPCIÓN";
   filaEnc1[COL.UND - 1] = "CONTRATADO";
   filaEnc1[COL.ACANT - 1] = "ACU ACTA ANTERIOR";
-  filaEnc1[COL.PCANT - 1] = "PRESENTE ACTA FINAL";
+  filaEnc1[COL.PCANT - 1] = "PRESENTE ACTA PARCIAL";
   filaEnc1[COL.TCANT - 1] = "ACUMULADO TOTAL";
   filaEnc1[COL.SCANT - 1] = "SALDO";
 
@@ -2290,7 +2335,17 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 1) + "*0.304"; });
     } else if (f.nivel === 12) {
       // IMPREVISTOS (1% DEL TCD): 2 filas arriba (TOTAL COSTOS DIRECTOS TCD).
-      COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 2) + "*0.01"; });
+      // Este usuario normalmente no ejecuta/cobra el 1% de imprevistos: el
+      // valor CONTRATADO (F) si sale al 1% del TCD (asi lo dice el
+      // contrato), pero lo ejecutado (Acta anterior H, Presente acta J,
+      // Acumulado L) siempre queda en 0 -- nunca se amortiza -- y el saldo
+      // (N) queda igual al valor contratado completo, en positivo.
+      var filaTCD12_ = row - 2;
+      dinamico[idx][COL.CVP] = "=" + colLetraEjecucionReal_(COL.CVP) + filaTCD12_ + "*0.01";
+      dinamico[idx][COL.AVR] = "0";
+      dinamico[idx][COL.PVR] = "0";
+      dinamico[idx][COL.TVR] = "0";
+      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row;
     } else if (f.nivel === 13) {
       // UTILIDAD (6% DEL TCD): 3 filas arriba (TOTAL COSTOS DIRECTOS TCD).
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 3) + "*0.06"; });
