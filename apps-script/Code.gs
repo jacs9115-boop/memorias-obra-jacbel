@@ -35,6 +35,7 @@ function doPost(e) {
     if (body.accion === "registrar_informe_generado") return jsonOutput_(registrarInformeGenerado_(body));
     if (body.accion === "subir_informe_generado") return jsonOutput_(subirInformeGeneradoDocx_(body));
     if (body.accion === "borrar_informe_generado") return jsonOutput_(borrarInformeGenerado_(body));
+    if (body.accion === "debug_ejecucion_real") return jsonOutput_(debugEjecucionReal_(body));
     return jsonOutput_({ ok: false, error: "Accion no reconocida" });
   } catch (err) {
     return jsonOutput_({ ok: false, error: String(err) });
@@ -663,6 +664,37 @@ function borrarInformeGenerado_(body) {
   }
   hoja.deleteRow(2 + idx);
   return { ok: true, historial: leerHistorialInformes_(ss) };
+}
+
+// TEMPORAL: solo para verificar en vivo el ajuste de IMPREVISTOS (H/J/L en
+// 0, N=F) y el renombre a "PRESENTE ACTA PARCIAL" en la hoja Ejecucion
+// Real, sin depender de acceso externo (gviz) ni del navegador. Se quita
+// del codigo (aca y en el doPost) apenas quede confirmado.
+function debugEjecucionReal_(body) {
+  var obra = buscarObra_(body.obraId);
+  if (!obra) return { ok: false, error: "Obra no encontrada" };
+  var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  var sh = ss.getSheetByName("Ejecucion Real");
+  if (!sh) return { ok: false, error: "No existe la hoja Ejecucion Real" };
+  var lastRow = sh.getLastRow();
+  var encabezado = sh.getRange(1, 1, 1, 14).getDisplayValues()[0];
+  var valores = sh.getRange(1, 1, lastRow, 14).getValues();
+  var mostrar = valores
+    .map(function (r, i) { return { fila: i + 1, item: r[0], descripcion: r[1] }; })
+    .filter(function (r) { return String(r.descripcion || "").toUpperCase().indexOf("IMPREVISTOS") !== -1; })
+    .map(function (r) {
+      var fila = r.fila;
+      return {
+        fila: fila,
+        descripcion: valores[fila - 1][1],
+        F_vrParcial: valores[fila - 1][5],
+        H_actaAnterior: valores[fila - 1][7],
+        J_presenteActa: valores[fila - 1][9],
+        L_acumuladoTotal: valores[fila - 1][11],
+        N_saldo: valores[fila - 1][13],
+      };
+    });
+  return { ok: true, encabezadoPCANT: encabezado[8], filasImprevistos: mostrar };
 }
 
 function listarHistorialInformes_(obraId, tipoDocumento) {
