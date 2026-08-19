@@ -46,19 +46,6 @@ async function llamarAppsScriptPost(body) {
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// TEMPORAL: pasa a Apps Script la accion de diagnostico debug_ejecucion_real
-// (verificacion en vivo del ajuste de IMPREVISTOS en Ejecucion Real). Se
-// quita apenas quede confirmado, junto con la accion misma en Code.gs.
-app.post("/api/obras/:obraId/debug-ejecucion-real", async (req, res) => {
-  try {
-    requireAppsScriptUrl();
-    const data = await llamarAppsScriptPost({ accion: "debug_ejecucion_real", obraId: req.params.obraId });
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message || "Error inesperado" });
-  }
-});
-
 // Boton "🔄 Actualizar reportes" de la app: reconstruye "Memoria de
 // Calculo" / "Registro Fotografico" / "Ejecucion Real" de una obra puntual
 // bajo demanda (ver nota en leerObra_/actualizarReportesObra_ en Code.gs).
