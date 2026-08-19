@@ -335,7 +335,15 @@ async function generarTextoConIA_(prompt, maxTokens) {
 async function generarDescripcionNecesidad_(objeto) {
   const prompt = `Eres un ingeniero que redacta informes de obra pública en Colombia. Con base UNICAMENTE en el siguiente objeto contractual, escribe una descripción de la necesidad, EXTENSA Y DETALLADA (aproximadamente una página, entre 500 y 700 palabras, en 3 a 5 párrafos separados por una línea en blanco entre cada uno), que cubra: el problema o la situación que dio origen al proyecto, el contexto y las condiciones que hacían necesaria esta intervención, y qué se soluciona concretamente con la ejecución de las obras. No uses título ni viñetas -- solo párrafos de texto corrido. Sé técnico y concreto; no inventes cifras, fechas, nombres de barrios/sectores específicos ni datos que no se puedan inferir razonablemente del objeto -- puedes desarrollar el contexto tecnico/sanitario/de infraestructura de forma general sin inventar hechos puntuales no mencionados.\n\nObjeto del contrato: "${objeto || ""}"`;
   const texto = await generarTextoConIA_(prompt, 1600);
-  return texto || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
+  // A veces el modelo agrega un titulo markdown ("# Descripcion de la
+  // necesidad...") pese a que el prompt pide no usarlo -- se descarta
+  // cualquier linea suelta que empiece en "#" antes de armar los parrafos.
+  const limpio = (texto || "")
+    .split("\n")
+    .filter((linea) => !/^\s*#+\s/.test(linea))
+    .join("\n")
+    .trim();
+  return limpio || "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
 }
 
 // "2. Resumen de actividades ejecutadas": en vez de solo listar
