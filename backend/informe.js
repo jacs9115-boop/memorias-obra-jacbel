@@ -58,7 +58,7 @@ function parrafo(texto, opts) {
   opts = opts || {};
   return new Paragraph({
     spacing: { after: opts.after ?? 120 },
-    alignment: opts.align,
+    alignment: opts.align || AlignmentType.JUSTIFIED,
     children: [new TextRun({ text: texto, size: opts.size || 20, italics: !!opts.italic, bold: !!opts.bold })],
   });
 }
@@ -175,6 +175,7 @@ function resumenActividadesNarrativo(items) {
     bloques.push(new Paragraph({
       indent: { left: 300 },
       spacing: { after: 80 },
+      alignment: AlignmentType.JUSTIFIED,
       children: [new TextRun({
         text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
         size: 20,
@@ -395,7 +396,7 @@ function seccionAvancePorDireccion(items) {
   const grupos = agruparAvancePorDireccion(items);
   if (!grupos.length) return [];
 
-  const bloques = [parrafo("Resumen de ejecución por dirección y capítulo, comparando lo contratado con lo ejecutado y lo pendiente (calculado sobre el valor, no la cantidad, de cada actividad):", { after: 100 })];
+  const bloques = [parrafo("Resumen de ejecución por dirección y capítulo, comparando lo contratado con lo ejecutado y lo pendiente. Los porcentajes y valores se calculan sobre el valor de los costos directos de cada actividad (cantidad × valor unitario), no sobre la cantidad física:", { after: 100 })];
   grupos.forEach((g) => { bloques.push(...panelResumenDireccion(g)); });
 
   const totalContratado = grupos.reduce((s, g) => s + g.vrContratado, 0);
@@ -544,8 +545,8 @@ async function descargarImagenDrive_(fotoUrl) {
 }
 
 // Una celda de la grilla de 2 fotos por fila: la imagen arriba y una
-// leyenda corta (fecha) abajo, sin bordes visibles (para que se vea como
-// una ficha fotografica y no como una tabla de datos).
+// leyenda corta (Imagen N) abajo, sin bordes visibles (para que se vea
+// como una ficha fotografica y no como una tabla de datos).
 function celdaFotoGrid_(foto) {
   const hijos = [];
   if (foto && foto.buf) {
@@ -556,7 +557,7 @@ function celdaFotoGrid_(foto) {
     }));
     hijos.push(new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: foto.fecha ? `Foto tomada el ${fmtFecha(foto.fecha)}` : "", size: 15, color: "666666", italics: true })],
+      children: [new TextRun({ text: foto.numero ? `Imagen ${foto.numero}` : "", size: 15, color: "666666", italics: true })],
     }));
   } else if (foto && foto.error) {
     hijos.push(parrafo(`(no se pudo incrustar esta foto)`, { italic: true, size: 15 }));
@@ -624,9 +625,11 @@ async function seccionFotos(fotos) {
       }));
 
       const fotosDescargadas = [];
+      let numero = 0;
       for (const f of porDireccion[dir][claveItem]) {
         const buf = await descargarImagenDrive_(f.fotoUrl);
-        fotosDescargadas.push(buf ? { buf, fecha: f.fecha } : { error: true });
+        numero++;
+        fotosDescargadas.push(buf ? { buf, numero } : { error: true });
       }
       bloques.push(grillaFotos_(fotosDescargadas));
       bloques.push(new Paragraph({ spacing: { after: 100 }, children: [] }));
