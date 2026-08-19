@@ -211,22 +211,20 @@ function tablaResumenPorcentaje(items) {
   });
 }
 
-// "Grafica" de avance por capitulo dentro de cada direccion: una barra de
-// progreso hecha con caracteres de bloque (texto, no imagen) -- se evita
-// a proposito depender de una libreria de graficos con bindings nativos
-// (fragil de instalar en el build de Render) o de un servicio externo de
-// graficas (enviaria datos del proyecto a un tercero); esto siempre
-// renderiza bien en Word sin dependencias extra. El avance se calcula por
-// VALOR (cantidad x vr. unitario), no por cantidad cruda, porque un mismo
-// capitulo mezcla items con distintas unidades (M2, M3, Un...) que no se
-// pueden sumar directamente.
-function barraTexto(pct) {
-  const p = Math.max(0, Math.min(100, pct || 0));
-  const llenos = Math.round((p / 100) * 20);
-  return "█".repeat(llenos) + "░".repeat(20 - llenos);
-}
+// "Grafica" de avance por capitulo dentro de cada direccion: en vez de una
+// imagen de grafica (necesitaria una libreria con bindings nativos fragil
+// de instalar en el build de Render, o mandar los datos del proyecto a un
+// servicio externo de graficas), se arma con TABLAS y celdas coloreadas
+// (una barra real verde/gris, no texto) -- Word soporta tablas anidadas
+// dentro de una celda, asi que cada fila de capitulo lleva su propia
+// barrita adentro. El avance se calcula por VALOR (cantidad x vr.
+// unitario), no por cantidad cruda, porque un mismo capitulo mezcla items
+// con distintas unidades (M2, M3, Un...) que no se pueden sumar
+// directamente.
+const VERDE_AVANCE = "70AD47";
+const GRIS_AVANCE = "D9D9D9";
 
-function avancePorCapituloYDireccion(items) {
+function agruparAvancePorDireccion(items) {
   const porDireccion = {};
   const ordenDireccion = [];
   (items || []).forEach((it) => {
@@ -238,35 +236,190 @@ function avancePorCapituloYDireccion(items) {
     porDireccion[direccion][capitulo].vrEjecutado += Number(it.vrEjecutadoAcumulado || 0);
   });
   return ordenDireccion
-    .map((direccion) => ({
-      direccion,
-      capitulos: Object.keys(porDireccion[direccion])
+    .map((direccion) => {
+      const capitulos = Object.keys(porDireccion[direccion])
         .filter((capitulo) => porDireccion[direccion][capitulo].vrContratado > 0)
         .map((capitulo) => {
           const c = porDireccion[direccion][capitulo];
-          return { capitulo, pct: (c.vrEjecutado / c.vrContratado) * 100 };
-        }),
-    }))
+          return { capitulo, vrContratado: c.vrContratado, vrEjecutado: c.vrEjecutado };
+        });
+      const vrContratado = capitulos.reduce((s, c) => s + c.vrContratado, 0);
+      const vrEjecutado = capitulos.reduce((s, c) => s + c.vrEjecutado, 0);
+      return { direccion, capitulos, vrContratado, vrEjecutado };
+    })
     .filter((g) => g.capitulos.length);
 }
 
-function seccionAvancePorDireccion(items) {
-  const grupos = avancePorCapituloYDireccion(items);
-  if (!grupos.length) return [];
-  const bloques = [parrafo("Avance de ejecución acumulado por capítulo, dentro de cada dirección/frente de obra (calculado sobre el valor, no la cantidad, de cada actividad):", { after: 140 })];
-  grupos.forEach((g) => {
-    bloques.push(new Paragraph({ spacing: { before: 160, after: 60 }, children: [new TextRun({ text: g.direccion, bold: true, size: 20 })] }));
-    g.capitulos.forEach((c) => {
-      bloques.push(new Paragraph({
-        indent: { left: 200 },
-        spacing: { after: 40 },
-        children: [
-          new TextRun({ text: barraTexto(c.pct), font: "Courier New", size: 18, color: AZUL_OSCURO }),
-          new TextRun({ text: `  ${fmtNum(c.pct)}%  ${c.capitulo}`, size: 18 }),
-        ],
-      }));
+// Barra horizontal real (tabla de 1 fila x 2 celdas, verde/gris segun el
+// %) del ancho que se le pida -- se usa tanto suelta (barra grande de cada
+// direccion) como anidada dentro de una celda (barra chica por capitulo).
+function barra(pct, anchoTotal) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const anchoVerde = Math.max(0, Math.round((anchoTotal * p) / 100));
+  const anchoGris = Math.max(0, anchoTotal - anchoVerde);
+  const columnas = [];
+  const celdas = [];
+  if (anchoVerde > 0) {
+    columnas.push(anchoVerde);
+    celdas.push(new TableCell({
+      width: { size: anchoVerde, type: WidthType.DXA },
+      shading: { type: ShadingType.CLEAR, fill: VERDE_AVANCE },
+      margins: { top: 30, bottom: 30, left: 0, right: 0 },
+      children: [new Paragraph({ children: [] })],
+    }));
+  }
+  if (anchoGris > 0) {
+    columnas.push(anchoGris);
+    celdas.push(new TableCell({
+      width: { size: anchoGris, type: WidthType.DXA },
+      shading: { type: ShadingType.CLEAR, fill: GRIS_AVANCE },
+      margins: { top: 30, bottom: 30, left: 0, right: 0 },
+      children: [new Paragraph({ children: [] })],
+    }));
+  }
+  return new Table({
+    width: { size: anchoTotal, type: WidthType.DXA },
+    columnWidths: columnas,
+    rows: [new TableRow({ children: celdas })],
+  });
+}
+
+// Celda de KPI (etiqueta chica arriba, valor grande abajo) para el panel
+// resumen de cada direccion.
+function celdaKpi(etiqueta, valor, opts) {
+  opts = opts || {};
+  return new TableCell({
+    width: { size: opts.width || 3100, type: WidthType.DXA },
+    shading: { type: ShadingType.CLEAR, fill: opts.bg || "F7F7F7" },
+    verticalAlign: VerticalAlign.CENTER,
+    borders: BORDES_CELDA,
+    margins: { top: 100, bottom: 100, left: 120, right: 120 },
+    children: [
+      new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 40 }, children: [new TextRun({ text: etiqueta, size: 15, color: "666666" })] }),
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: valor, bold: true, size: 22, color: opts.color || "000000" })] }),
+    ],
+  });
+}
+
+function panelResumenDireccion(g) {
+  const pct = g.vrContratado > 0 ? (g.vrEjecutado / g.vrContratado) * 100 : 0;
+  const pendiente = Math.max(0, g.vrContratado - g.vrEjecutado);
+  const ancho = 9500;
+
+  const bloques = [];
+  bloques.push(new Paragraph({
+    shading: { type: ShadingType.CLEAR, fill: AZUL_OSCURO },
+    spacing: { before: 240, after: 100 },
+    children: [new TextRun({ text: `  DIRECCIÓN: ${g.direccion}`, bold: true, color: "FFFFFF", size: 22 })],
+  }));
+
+  bloques.push(new Table({
+    width: { size: ancho, type: WidthType.DXA },
+    columnWidths: [3167, 3167, 3166],
+    rows: [new TableRow({
+      children: [
+        celdaKpi("CONTRATADO", fmtCOP(g.vrContratado), { width: 3167 }),
+        celdaKpi("EJECUTADO AL CORTE", fmtCOP(g.vrEjecutado), { width: 3167, bg: "EAF3E5", color: "375623" }),
+        celdaKpi("PENDIENTE POR EJECUTAR", fmtCOP(pendiente), { width: 3166, bg: "F2F2F2", color: "595959" }),
+      ],
+    })],
+  }));
+
+  bloques.push(new Paragraph({ spacing: { before: 100, after: 40 }, children: [] }));
+  bloques.push(barra(pct, ancho));
+  bloques.push(new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 40, after: 160 },
+    children: [new TextRun({ text: `${fmtCOP(g.vrEjecutado)} ejecutado (${fmtNum(pct)}%)  —  ${fmtCOP(pendiente)} pendiente (${fmtNum(100 - pct)}%)`, size: 16, color: "666666" })],
+  }));
+
+  const anchoBarraCapitulo = 1600;
+  const header = new TableRow({
+    tableHeader: true,
+    children: [
+      celda("Capítulo", { width: 2400, bold: true, bg: AZUL_OSCURO, color: "FFFFFF" }),
+      celda("Contratado", { width: 1900, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Ejecutado al corte", { width: 1900, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Pendiente", { width: 1700, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+      celda("Avance", { width: anchoBarraCapitulo, bold: true, bg: AZUL_OSCURO, color: "FFFFFF", align: AlignmentType.CENTER }),
+    ],
+  });
+  const filas = g.capitulos.map((c) => {
+    const cpct = c.vrContratado > 0 ? (c.vrEjecutado / c.vrContratado) * 100 : 0;
+    return new TableRow({
+      children: [
+        celda(c.capitulo, { width: 2400 }),
+        celda(fmtCOP(c.vrContratado), { width: 1900, align: AlignmentType.RIGHT }),
+        celda(fmtCOP(c.vrEjecutado), { width: 1900, align: AlignmentType.RIGHT }),
+        celda(fmtCOP(Math.max(0, c.vrContratado - c.vrEjecutado)), { width: 1700, align: AlignmentType.RIGHT }),
+        new TableCell({
+          width: { size: anchoBarraCapitulo, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          borders: BORDES_CELDA,
+          margins: { top: 60, bottom: 60, left: 80, right: 80 },
+          children: [
+            barra(cpct, anchoBarraCapitulo - 200),
+            new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 30 }, children: [new TextRun({ text: `${fmtNum(cpct)}%`, size: 14 })] }),
+          ],
+        }),
+      ],
     });
   });
+  const filaTotal = new TableRow({
+    children: [
+      celda("TOTAL DIRECCIÓN", { width: 2400, bold: true, bg: GRIS_CLARO }),
+      celda(fmtCOP(g.vrContratado), { width: 1900, align: AlignmentType.RIGHT, bold: true, bg: GRIS_CLARO }),
+      celda(fmtCOP(g.vrEjecutado), { width: 1900, align: AlignmentType.RIGHT, bold: true, bg: GRIS_CLARO }),
+      celda(fmtCOP(pendiente), { width: 1700, align: AlignmentType.RIGHT, bold: true, bg: GRIS_CLARO }),
+      celda(`${fmtNum(pct)}%`, { width: anchoBarraCapitulo, align: AlignmentType.CENTER, bold: true, bg: GRIS_CLARO }),
+    ],
+  });
+
+  bloques.push(new Table({
+    width: { size: ancho, type: WidthType.DXA },
+    columnWidths: [2400, 1900, 1900, 1700, anchoBarraCapitulo],
+    rows: [header].concat(filas).concat([filaTotal]),
+  }));
+
+  return bloques;
+}
+
+function seccionAvancePorDireccion(items) {
+  const grupos = agruparAvancePorDireccion(items);
+  if (!grupos.length) return [];
+
+  const bloques = [parrafo("Resumen de ejecución por dirección y capítulo, comparando lo contratado con lo ejecutado y lo pendiente (calculado sobre el valor, no la cantidad, de cada actividad):", { after: 100 })];
+  grupos.forEach((g) => { bloques.push(...panelResumenDireccion(g)); });
+
+  const totalContratado = grupos.reduce((s, g) => s + g.vrContratado, 0);
+  const totalEjecutado = grupos.reduce((s, g) => s + g.vrEjecutado, 0);
+  const totalPendiente = Math.max(0, totalContratado - totalEjecutado);
+  const totalPct = totalContratado > 0 ? (totalEjecutado / totalContratado) * 100 : 0;
+
+  bloques.push(new Paragraph({
+    shading: { type: ShadingType.CLEAR, fill: "000000" },
+    spacing: { before: 260, after: 100 },
+    children: [new TextRun({ text: "  TOTAL GENERAL DE LA OBRA", bold: true, color: "FFFFFF", size: 22 })],
+  }));
+  bloques.push(new Table({
+    width: { size: 9500, type: WidthType.DXA },
+    columnWidths: [3167, 3167, 3166],
+    rows: [new TableRow({
+      children: [
+        celdaKpi("TOTAL CONTRATADO", fmtCOP(totalContratado), { width: 3167 }),
+        celdaKpi("TOTAL EJECUTADO AL CORTE", fmtCOP(totalEjecutado), { width: 3167, bg: "EAF3E5", color: "375623" }),
+        celdaKpi("TOTAL PENDIENTE", fmtCOP(totalPendiente), { width: 3166, bg: "F2F2F2", color: "595959" }),
+      ],
+    })],
+  }));
+  bloques.push(new Paragraph({ spacing: { before: 100, after: 40 }, children: [] }));
+  bloques.push(barra(totalPct, 9500));
+  bloques.push(new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 40, after: 160 },
+    children: [new TextRun({ text: `${fmtNum(totalPct)}% ejecutado — ${fmtNum(100 - totalPct)}% pendiente`, size: 16, color: "666666" })],
+  }));
+
   return bloques;
 }
 
