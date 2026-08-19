@@ -330,7 +330,7 @@ function panelResumenDireccion(g) {
   bloques.push(new Paragraph({
     alignment: AlignmentType.CENTER,
     spacing: { before: 40, after: 160 },
-    children: [new TextRun({ text: `${fmtCOP(g.vrEjecutado)} ejecutado (${fmtNum(pct)}%)  —  ${fmtCOP(pendiente)} pendiente (${fmtNum(100 - pct)}%)`, size: 16, color: "666666" })],
+    children: [new TextRun({ text: `${fmtCOP(g.vrEjecutado)} ejecutado (${fmtNum(pct)}%)  —  ${fmtCOP(pendiente)} pendiente (${fmtNum(Math.max(0, 100 - pct))}%)`, size: 16, color: "666666" })],
   }));
 
   const anchoBarraCapitulo = 1600;
@@ -417,7 +417,7 @@ function seccionAvancePorDireccion(items) {
   bloques.push(new Paragraph({
     alignment: AlignmentType.CENTER,
     spacing: { before: 40, after: 160 },
-    children: [new TextRun({ text: `${fmtNum(totalPct)}% ejecutado — ${fmtNum(100 - totalPct)}% pendiente`, size: 16, color: "666666" })],
+    children: [new TextRun({ text: `${fmtNum(totalPct)}% ejecutado — ${fmtNum(Math.max(0, 100 - totalPct))}% pendiente`, size: 16, color: "666666" })],
   }));
 
   return bloques;

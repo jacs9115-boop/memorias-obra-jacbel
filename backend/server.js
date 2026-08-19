@@ -349,17 +349,34 @@ async function generarDescripcionNecesidad_(objeto) {
 async function generarDescripcionesActividades_(items) {
   if (!items.length) return items;
   const lista = items.map((it, i) => `${i + 1}. Item ${it.item} (${it.unidad}): ${it.descripcion}`).join("\n");
-  const prompt = `Eres un ingeniero que redacta el informe de un contratista de obra pública en Colombia. Para cada actividad de la siguiente lista, escribe una descripción breve (1 a 2 frases) de CÓMO se ejecutó esa actividad en campo, basándote en su nombre/descripción técnica y su unidad de medida. No inventes cantidades, fechas ni ubicaciones -- describe el procedimiento constructivo de forma general y técnica.\n\nActividades:\n${lista}\n\nResponde UNICAMENTE con un JSON array de ${items.length} strings, en el mismo orden, sin texto adicional. Ejemplo de forma: ["descripción de la actividad 1", "descripción de la actividad 2", ...]`;
-  const texto = await generarTextoConIA_(prompt, 4000);
-  const jsonMatch = texto.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
+  const prompt = `Eres un ingeniero que redacta el informe de un contratista de obra pública en Colombia. Para cada actividad de la siguiente lista, escribe una descripción breve (1 a 2 frases) de CÓMO se ejecutó esa actividad en campo, basándote en su nombre/descripción técnica y su unidad de medida. No inventes cantidades, fechas ni ubicaciones -- describe el procedimiento constructivo de forma general y técnica.\n\nActividades:\n${lista}\n\nResponde UNICAMENTE con un JSON array de EXACTAMENTE ${items.length} strings, en el mismo orden, sin texto adicional antes ni después. Ejemplo de forma: ["descripción de la actividad 1", "descripción de la actividad 2", ...]`;
+
+  // Con listas largas (varias decenas de items) la respuesta puede
+  // truncarse antes de cerrar el JSON -- a diferencia de
+  // generarTextoConIA_ (que da por buena CUALQUIER respuesta no vacia),
+  // aca se valida que el JSON haya cerrado bien Y que traiga la cantidad
+  // exacta de elementos ANTES de aceptar el intento, y si no, se
+  // reintenta con el otro modelo en vez de quedarse con un JSON
+  // incompleto.
+  const intentos = [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
+  for (let i = 0; i < intentos.length; i++) {
     try {
-      const arr = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(arr) && arr.length === items.length) {
-        return items.map((it, i) => Object.assign({}, it, { descripcionEjecucion: String(arr[i] || it.descripcion) }));
+      const message = await anthropic.messages.create({
+        model: intentos[i],
+        max_tokens: 8000,
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      });
+      const textBlock = message.content.find((b) => b.type === "text");
+      const jsonMatch = textBlock && textBlock.text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const arr = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(arr) && arr.length === items.length) {
+          return items.map((it, idx) => Object.assign({}, it, { descripcionEjecucion: String(arr[idx] || it.descripcion) }));
+        }
+        console.error(`Descripciones de actividades: el modelo ${intentos[i]} devolvió ${Array.isArray(arr) ? arr.length : "no-array"}, se esperaban ${items.length}`);
       }
     } catch (err) {
-      console.error("No se pudo parsear la descripcion de actividades generada por IA:", err.message);
+      console.error(`Descripciones de actividades IA falló con modelo ${intentos[i]}:`, err.message);
     }
   }
   return items.map((it) => Object.assign({}, it, { descripcionEjecucion: it.descripcion }));
