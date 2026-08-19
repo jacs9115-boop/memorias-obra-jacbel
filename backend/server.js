@@ -455,6 +455,22 @@ app.get("/api/obras/:obraId/informe-supervision/historial", async (req, res) => 
   }
 });
 
+app.delete("/api/obras/:obraId/informe-supervision/historial/:fechaGeneracion", async (req, res) => {
+  try {
+    requireAppsScriptUrl();
+    const data = await llamarAppsScriptPost({
+      accion: "borrar_informe_generado",
+      obraId: req.params.obraId,
+      fechaGeneracion: req.params.fechaGeneracion,
+    });
+    if (!data.ok) return res.status(400).json({ error: data.error || "No se pudo borrar el informe" });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "Error inesperado" });
+  }
+});
+
 // Genera el .docx del Informe del Contratista para un periodo puntual:
 // junta los datos manuales (Fase 1) + el balance/resumen calculado en Apps
 // Script para ese rango de fechas, arma el documento con la libreria docx

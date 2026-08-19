@@ -1457,13 +1457,28 @@ async function cargarHistorialInformes() {
     }
     cont.innerHTML = "<div style=\"font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:6px\">Informes generados antes:</div>" +
       historial.slice().reverse().map((h) => `
-        <div style="font-size:12.5px;padding:6px 0;border-top:1px solid var(--border)">
-          ${h.tipo === "Final" ? "Final" : "Parcial No. " + h.numeroParcial} — ${h.fechaDesde} a ${h.fechaHasta}
-          ${h.urlDocx ? `— <a href="${h.urlDocx}" target="_blank" rel="noopener">ver / descargar</a>` : ""}
+        <div style="font-size:12.5px;padding:6px 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span>
+            ${h.tipo === "Final" ? "Final" : "Parcial No. " + h.numeroParcial} — ${h.fechaDesde} a ${h.fechaHasta}
+            ${h.urlDocx ? `— <a href="${h.urlDocx}" target="_blank" rel="noopener">ver / descargar</a>` : ""}
+          </span>
+          <button type="button" title="Eliminar este informe" onclick="borrarInformeDelHistorial('${h.fechaGeneracion}')" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 6px;flex-shrink:0">🗑️</button>
         </div>
       `).join("");
   } catch (err) {
     if (cont) cont.innerHTML = "";
+  }
+}
+
+async function borrarInformeDelHistorial(fechaGeneracion) {
+  if (!confirm("¿Eliminar este informe generado? También se manda a la papelera el archivo .docx en Drive. Esto no borra los datos de la obra, solo este documento ya generado.")) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/obras/${obraActual.obra.obraId}/informe-supervision/historial/${encodeURIComponent(fechaGeneracion)}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Error al eliminar el informe");
+    cargarHistorialInformes();
+  } catch (err) {
+    mostrarToast(err.message || "Error al eliminar el informe", true);
   }
 }
 

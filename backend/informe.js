@@ -15,6 +15,7 @@ const AZUL_OSCURO = "1F4E78";
 const GRIS_CLARO = "F2F2F2";
 const BORDE = { style: BorderStyle.SINGLE, size: 4, color: "999999" };
 const BORDES_CELDA = { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE };
+const SIN_BORDE_ = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
 
 function fmtCOP(n) {
   return "$ " + Math.round(Number(n) || 0).toLocaleString("es-CO");
@@ -542,32 +543,93 @@ async function descargarImagenDrive_(fotoUrl) {
   }
 }
 
+// Una celda de la grilla de 2 fotos por fila: la imagen arriba y una
+// leyenda corta (fecha) abajo, sin bordes visibles (para que se vea como
+// una ficha fotografica y no como una tabla de datos).
+function celdaFotoGrid_(foto) {
+  const hijos = [];
+  if (foto && foto.buf) {
+    hijos.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 60 },
+      children: [new ImageRun({ type: "jpg", data: foto.buf, transformation: { width: 300, height: 225 } })],
+    }));
+    hijos.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: foto.fecha ? `Foto tomada el ${fmtFecha(foto.fecha)}` : "", size: 15, color: "666666", italics: true })],
+    }));
+  } else if (foto && foto.error) {
+    hijos.push(parrafo(`(no se pudo incrustar esta foto)`, { italic: true, size: 15 }));
+  } else {
+    hijos.push(new Paragraph({ children: [] }));
+  }
+  return new TableCell({
+    width: { size: 4750, type: WidthType.DXA },
+    borders: { top: SIN_BORDE_, bottom: SIN_BORDE_, left: SIN_BORDE_, right: SIN_BORDE_ },
+    margins: { top: 100, bottom: 200, left: 100, right: 100 },
+    children: hijos,
+  });
+}
+
+function grillaFotos_(fotosDescargadas) {
+  const filas = [];
+  for (let i = 0; i < fotosDescargadas.length; i += 2) {
+    filas.push(new TableRow({
+      children: [celdaFotoGrid_(fotosDescargadas[i]), celdaFotoGrid_(fotosDescargadas[i + 1])],
+    }));
+  }
+  return new Table({
+    width: { size: 9500, type: WidthType.DXA },
+    columnWidths: [4750, 4750],
+    rows: filas,
+  });
+}
+
+// Registro fotografico organizado igual que el control de obra en campo:
+// un encabezado por DIRECCION (barra de color), y dentro de cada una, una
+// leyenda de "LOCACIÓN — ACTIVIDAD" por cada item con sus fotos en una
+// grilla de 2 columnas (no una foto grande por renglon como antes).
 async function seccionFotos(fotos) {
   if (!fotos || !fotos.length) {
     return [parrafo("No se registraron fotos dentro del periodo reportado.", { italic: true })];
   }
-  // Agrupadas por direccion + item, un titulo por grupo.
-  const grupos = {};
-  const orden = [];
+
+  const porDireccion = {};
+  const ordenDirecciones = [];
   fotos.forEach((f) => {
-    const clave = `${f.direccion} — ${f.item} ${f.descripcion || ""}`.trim();
-    if (!grupos[clave]) { grupos[clave] = []; orden.push(clave); }
-    grupos[clave].push(f);
+    const dir = f.direccion || "Sin dirección";
+    if (!porDireccion[dir]) { porDireccion[dir] = {}; ordenDirecciones.push(dir); }
+    const claveItem = `${f.item} — ${f.descripcion || ""}`.trim();
+    if (!porDireccion[dir][claveItem]) porDireccion[dir][claveItem] = [];
+    porDireccion[dir][claveItem].push(f);
   });
 
   const bloques = [];
-  for (const clave of orden) {
-    bloques.push(new Paragraph({ spacing: { before: 200, after: 80 }, children: [new TextRun({ text: clave, bold: true, size: 20 })] }));
-    for (const f of grupos[clave]) {
-      const buf = await descargarImagenDrive_(f.fotoUrl);
-      if (!buf) {
-        bloques.push(parrafo(`(no se pudo incrustar la foto: ${f.fotoUrl})`, { italic: true, size: 16 }));
-        continue;
-      }
+  for (const dir of ordenDirecciones) {
+    bloques.push(new Paragraph({
+      shading: { type: ShadingType.CLEAR, fill: VERDE_AVANCE },
+      spacing: { before: 260, after: 140 },
+      children: [new TextRun({ text: `  DIRECCIÓN: ${dir}`, bold: true, color: "FFFFFF", size: 22 })],
+    }));
+
+    for (const claveItem of Object.keys(porDireccion[dir])) {
       bloques.push(new Paragraph({
-        spacing: { after: 160 },
-        children: [new ImageRun({ type: "jpg", data: buf, transformation: { width: 380, height: 285 } })],
+        spacing: { before: 80, after: 100 },
+        children: [
+          new TextRun({ text: "LOCACIÓN: ", bold: true, size: 18, color: AZUL_OSCURO }),
+          new TextRun({ text: `${dir}  —  `, size: 18 }),
+          new TextRun({ text: "ACTIVIDAD: ", bold: true, size: 18, color: AZUL_OSCURO }),
+          new TextRun({ text: claveItem, size: 18 }),
+        ],
       }));
+
+      const fotosDescargadas = [];
+      for (const f of porDireccion[dir][claveItem]) {
+        const buf = await descargarImagenDrive_(f.fotoUrl);
+        fotosDescargadas.push(buf ? { buf, fecha: f.fecha } : { error: true });
+      }
+      bloques.push(grillaFotos_(fotosDescargadas));
+      bloques.push(new Paragraph({ spacing: { after: 100 }, children: [] }));
     }
   }
   return bloques;
