@@ -264,6 +264,12 @@ Reglas: "valorInicial" en pesos colombianos (COP), numero entero sin puntos ni c
   "porcentajeAnticipo": 30
 }
 Reglas: "valorAnticipo" es el valor pagado/cobrado como anticipo en pesos colombianos (COP), numero entero sin puntos ni comas ni simbolo de moneda. "porcentajeAnticipo" es el % de anticipo pactado si aparece explicito en el comprobante (numero sin simbolo %); si no aparece, deja "". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo es ilegible, usa "" (o 0 para valorAnticipo) solo en ese campo, sin inventar.`,
+  designacion_supervision: `Estas leyendo un memorando o documento de designación de supervisión de un contrato de obra pública en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+{
+  "supervisorDesignacion": "numero y fecha del memorando/documento de designacion, tal como aparece (ej: 'Memorando N.° 12345, 23 de abril de 2025')",
+  "supervisorCargo": "cargo del supervisor designado, si aparece (ej: Profesional III)"
+}
+Reglas: junta el numero y la fecha del memorando en un solo texto para "supervisorDesignacion". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo es ilegible o no aparece, usa "" en ese campo, sin inventar.`,
 };
 
 // Un campo por tipo que, si viene lleno (o hay al menos un amparo), se
@@ -273,6 +279,7 @@ function extraccionEsUtil_(tipo, extraido) {
   if (!extraido) return false;
   if (tipo === "polizas") return Array.isArray(extraido.amparos) && extraido.amparos.length > 0 || !!extraido.polizaCumplimiento;
   if (tipo === "comprobante_anticipo") return Number(extraido.valorAnticipo) > 0;
+  if (tipo === "designacion_supervision") return !!(extraido.supervisorDesignacion || extraido.supervisorCargo);
   return !!(extraido.numeroContrato || extraido.contratista || extraido.objeto);
 }
 

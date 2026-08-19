@@ -422,6 +422,7 @@ var CAMPOS_INFORME_SUPERVISION_ = [
   "polizaCumplimiento", "polizaResponsabilidadCivil", "companiaAseguradora",
   "porcentajeAnticipo", "valorAnticipo",
   "urlActaInicio", "urlPolizas", "urlContrato", "urlComprobanteAnticipo",
+  "urlDesignacionSupervision",
   // Propios del Informe de Supervision (AP2-FO-024) -- guardarDatosInforme_
   // ya acepta cualquier clave nueva sin que haga falta tocar mas codigo
   // aparte de esta lista (solo se usa para el orden en que quedan escritos
@@ -562,6 +563,7 @@ var TIPO_A_CAMPO_DOCUMENTO_ = {
   polizas: "urlPolizas",
   contrato: "urlContrato",
   comprobante_anticipo: "urlComprobanteAnticipo",
+  designacion_supervision: "urlDesignacionSupervision",
 };
 
 function subirDocumentoInforme_(body) {

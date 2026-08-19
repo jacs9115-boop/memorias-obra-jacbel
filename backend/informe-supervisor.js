@@ -11,8 +11,9 @@
 // institucional con logo, tabla de "actividades generales" SI/NO, y la
 // narrativa de cronologia en primera persona del supervisor).
 const {
-  Document, Paragraph, TextRun, Table, TableRow, TableCell, Header,
-  AlignmentType, WidthType, BorderStyle, ImageRun, VerticalAlign,
+  Document, Paragraph, TextRun, Table, TableRow, TableCell, Header, Footer,
+  AlignmentType, WidthType, BorderStyle, ImageRun, VerticalAlign, PageBreak,
+  PageNumber, UnderlineType,
 } = require("docx");
 const fs = require("fs");
 const path = require("path");
@@ -26,6 +27,11 @@ const {
 } = require("./informe");
 
 const LOGO_PATH_ = path.join(__dirname, "assets", "acuavalle-logo.png");
+// Color del formato AP2-FO-024 real (los numeros/datos variables del
+// contrato van en este rojo, las etiquetas fijas en negro) -- ver la
+// portada real que sirvio de referencia.
+const ROJO_ = "C00000";
+const FUENTE_ = "Arial";
 
 // Los 8 tipos de "acta" del formato AP2-FO-024 -- el usuario marca cuales
 // ocurrieron (SI/NO), con fecha y observaciones, en la pantalla de
@@ -50,23 +56,24 @@ function mesAnioEs_(iso) {
 }
 
 // ---------- Encabezado institucional (se repite en cada pagina) ----------
+// Tabla de 3 celdas igual al formato real: logo solo | PROCESO DE
+// CONTRATACION + INFORME... + CONTRATO... | Codigo/Version. El
+// "SUBGERENCIA TECNICA" del membrete va en el cuerpo (bloqueTitulo_), no
+// aca -- asi es como esta en el documento real de referencia.
 function headerAcuavalle_(datos) {
   const logoBuf = fs.existsSync(LOGO_PATH_) ? fs.readFileSync(LOGO_PATH_) : null;
-  const tituloInforme = datos.tipoInforme === "Final"
-    ? "INFORME FINAL DE SUPERVISIÓN"
-    : `INFORME PARCIAL No. ${datos.numeroParcial || ""} DE SUPERVISIÓN`;
+  const numeroInforme = datos.tipoInforme === "Final" ? "Final" : String(datos.numeroParcial || "");
 
   const celdaLogo = new TableCell({
     width: { size: 2200, type: WidthType.DXA },
     verticalAlign: VerticalAlign.CENTER,
     borders: BORDES_CELDA,
-    margins: { top: 60, bottom: 60, left: 100, right: 100 },
+    margins: { top: 100, bottom: 100, left: 100, right: 100 },
     children: [
       new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: logoBuf ? [new ImageRun({ type: "png", data: logoBuf, transformation: { width: 90, height: 90 } })] : [],
+        children: logoBuf ? [new ImageRun({ type: "png", data: logoBuf, transformation: { width: 110, height: 110 } })] : [],
       }),
-      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "SUBGERENCIA TÉCNICA", bold: true, size: 14 })] }),
     ],
   });
 
@@ -76,9 +83,21 @@ function headerAcuavalle_(datos) {
     borders: BORDES_CELDA,
     margins: { top: 60, bottom: 60, left: 100, right: 100 },
     children: [
-      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "PROCESO DE CONTRATACIÓN", bold: true, size: 16 })] }),
-      new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 40 }, children: [new TextRun({ text: tituloInforme, bold: true, size: 18, color: AZUL_OSCURO })] }),
-      new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 40 }, children: [new TextRun({ text: `CONTRATO DE OBRA No. ${datos.numeroContrato || ""}`, bold: true, size: 16 })] }),
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "PROCESO DE CONTRATACION", bold: true, size: 18, font: FUENTE_ })] }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER, spacing: { before: 60 },
+        children: [
+          new TextRun({ text: "INFORME DE SUPERVISION No. ", bold: true, size: 18, font: FUENTE_ }),
+          new TextRun({ text: numeroInforme, bold: true, size: 18, color: ROJO_, font: FUENTE_ }),
+        ],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER, spacing: { before: 40 },
+        children: [
+          new TextRun({ text: "CONTRATO DE OBRA No. ", bold: true, size: 18, font: FUENTE_ }),
+          new TextRun({ text: datos.numeroContrato || "", bold: true, size: 18, color: ROJO_, font: FUENTE_ }),
+        ],
+      }),
     ],
   });
 
@@ -88,8 +107,8 @@ function headerAcuavalle_(datos) {
     borders: BORDES_CELDA,
     margins: { top: 60, bottom: 60, left: 80, right: 80 },
     children: [
-      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "Código: AP2-FO-024", size: 14 })] }),
-      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "Versión No.: 002", size: 14 })] }),
+      new Paragraph({ children: [new TextRun({ text: "Código: AP2-FO-024", size: 15, font: FUENTE_ })] }),
+      new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: "Versión No.: 002", size: 15, font: FUENTE_ })] }),
     ],
   });
 
@@ -100,49 +119,87 @@ function headerAcuavalle_(datos) {
         columnWidths: [2200, 7300, 1600],
         rows: [new TableRow({ children: [celdaLogo, celdaTitulo, celdaCodigo] })],
       }),
-      new Paragraph({ spacing: { after: 0 }, children: [] }),
     ],
   });
 }
 
-// ---------- Bloque de titulo (dentro del cuerpo, debajo del encabezado) ----------
+// Pie de pagina institucional (se repite en cada pagina): frase de
+// propiedad + "Pagina X de Y" con los campos automaticos de Word, igual
+// al documento real de referencia.
+function footerAcuavalle_() {
+  return new Footer({
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new TextRun({ text: "Propiedad de ACUAVALLE S.A. E.S.P. – Prohibida su reproducción", size: 14, color: "808080", font: FUENTE_ })],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [
+          new TextRun({ text: "Página ", size: 14, color: "808080", font: FUENTE_ }),
+          new TextRun({ children: [PageNumber.CURRENT], size: 14, color: "808080", font: FUENTE_ }),
+          new TextRun({ text: " de ", size: 14, color: "808080", font: FUENTE_ }),
+          new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 14, color: "808080", font: FUENTE_ }),
+        ],
+      }),
+    ],
+  });
+}
+
+// ---------- Portada (ocupa exactamente la pagina 1, ver el PageBreak al
+// final del bloque en generarInformeSupervisorDocx) ----------
 function bloqueTitulo_(datos) {
-  const tituloInforme = datos.tipoInforme === "Final"
-    ? "INFORME FINAL DE SUPERVISIÓN"
-    : `INFORME PARCIAL No. ${datos.numeroParcial || ""} DE SUPERVISIÓN`;
-  const supervisorLinea = [datos.supervisor || "", datos.supervisorCargo || ""].filter(Boolean).join(", ");
+  const numeroInforme = datos.tipoInforme === "Final" ? "FINAL" : `PARCIAL No. ${datos.numeroParcial || ""}`;
+  const cargoSupervisor = datos.supervisorCargo ? `, ${datos.supervisorCargo}.` : "";
 
   return [
     new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 100, after: 60 },
-      children: [new TextRun({ text: tituloInforme, bold: true, size: 26, color: AZUL_OSCURO })],
+      spacing: { before: 200, after: 400 },
+      children: [new TextRun({ text: "SUBGERENCIA TECNICA", bold: true, color: ROJO_, size: 24, font: FUENTE_ })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 40 },
-      children: [new TextRun({ text: `CONTRATO DE OBRA No. ${datos.numeroContrato || ""}`, bold: true, size: 20 })],
+      spacing: { before: 400, after: 300 },
+      children: [
+        new TextRun({ text: "INFORME ", bold: true, size: 32, font: FUENTE_, underline: { type: UnderlineType.SINGLE } }),
+        new TextRun({ text: `${numeroInforme} `, bold: true, size: 32, color: ROJO_, font: FUENTE_, underline: { type: UnderlineType.SINGLE } }),
+        new TextRun({ text: "DE SUPERVISIÓN", bold: true, size: 32, font: FUENTE_, underline: { type: UnderlineType.SINGLE } }),
+      ],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 160 },
-      children: [new TextRun({ text: datos.objeto || "", size: 18 })],
+      spacing: { before: 200, after: 60 },
+      children: [
+        new TextRun({ text: "CONTRATO DE OBRA No. ", bold: true, size: 24, font: FUENTE_ }),
+        new TextRun({ text: datos.numeroContrato || "", bold: true, size: 24, color: ROJO_, font: FUENTE_ }),
+      ],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 20 },
-      children: [new TextRun({ text: "SUPERVISOR:", bold: true, size: 18, color: AZUL_OSCURO })],
+      spacing: { before: 200, after: 500 },
+      children: [new TextRun({ text: (datos.objeto || "").toUpperCase(), bold: true, size: 22, color: ROJO_, font: FUENTE_ })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 160 },
-      children: [new TextRun({ text: supervisorLinea, bold: true, size: 18 })],
+      spacing: { before: 300, after: 40 },
+      children: [new TextRun({ text: "SUPERVISOR:", bold: true, size: 20, font: FUENTE_ })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { after: 300 },
-      children: [new TextRun({ text: `FECHA: Cali - Valle, ${mesAnioEs_(datos.fechaHasta)}`, italics: true, size: 18, color: "666666" })],
+      spacing: { after: 500 },
+      children: [new TextRun({ text: `${datos.supervisor || ""}${cargoSupervisor}`, bold: true, size: 20, color: ROJO_, font: FUENTE_ })],
     }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 300 },
+      children: [
+        new TextRun({ text: "FECHA: Cali - Valle, ", size: 20, font: FUENTE_ }),
+        new TextRun({ text: mesAnioEs_(datos.fechaHasta), size: 20, color: ROJO_, font: FUENTE_ }),
+      ],
+    }),
+    // La portada ocupa toda la pagina 1 -- el numeral "1. Informacion del
+    // contrato" arranca en la pagina 2 aunque la portada no llene la hoja.
+    new Paragraph({ children: [new PageBreak()] }),
   ];
 }
 
@@ -269,9 +326,11 @@ async function generarInformeSupervisorDocx(datos, balance, items, fotos) {
   children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "ACUAVALLE S.A. E.S.P.", size: 18, bold: true })] }));
 
   const doc = new Document({
+    styles: { default: { document: { run: { font: FUENTE_ } } } },
     sections: [{
       properties: {},
       headers: { default: headerAcuavalle_(datos) },
+      footers: { default: footerAcuavalle_() },
       children,
     }],
   });

@@ -259,11 +259,17 @@
         <button type="button" class="btn-secondary btnSeleccionarAdjunto" data-tipo="contrato" style="margin-top:0">Adjuntar Contrato</button>
         <div class="status statusAdjunto" data-tipo="contrato" style="min-height:auto;margin:6px 0 0"></div>
       </div>
-      <div class="field-adjunto" data-tipo="comprobante_anticipo">
+      <div class="field-adjunto" data-tipo="comprobante_anticipo" style="margin-bottom:14px">
         <label style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px">Comprobante Cobro de Anticipo (opcional)</label>
         <input type="file" accept=".pdf,image/*" class="inputAdjuntoInforme" data-tipo="comprobante_anticipo" style="display:none" />
         <button type="button" class="btn-secondary btnSeleccionarAdjunto" data-tipo="comprobante_anticipo" style="margin-top:0">Adjuntar Comprobante de Anticipo</button>
         <div class="status statusAdjunto" data-tipo="comprobante_anticipo" style="min-height:auto;margin:6px 0 0"></div>
+      </div>
+      <div class="field-adjunto" data-tipo="designacion_supervision">
+        <label style="display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px">Designación de Supervisión (opcional)</label>
+        <input type="file" accept=".pdf,image/*" class="inputAdjuntoInforme" data-tipo="designacion_supervision" style="display:none" />
+        <button type="button" class="btn-secondary btnSeleccionarAdjunto" data-tipo="designacion_supervision" style="margin-top:0">Adjuntar Designación de Supervisión</button>
+        <div class="status statusAdjunto" data-tipo="designacion_supervision" style="min-height:auto;margin:6px 0 0"></div>
       </div>
     </div>
 
@@ -1435,10 +1441,12 @@ const EVENTOS_CONTRATO_DEFAULT = [
 let eventosActuales = [];
 const TIPO_A_CAMPO_URL_ADJUNTO = {
   acta_inicio: "urlActaInicio", polizas: "urlPolizas", contrato: "urlContrato", comprobante_anticipo: "urlComprobanteAnticipo",
+  designacion_supervision: "urlDesignacionSupervision",
 };
 const TIPO_A_ETIQUETA_ADJUNTO = {
   acta_inicio: "Acta de Inicio", polizas: "Aprobación de Pólizas",
   contrato: "Contrato", comprobante_anticipo: "Comprobante de Anticipo",
+  designacion_supervision: "Designación de Supervisión",
 };
 
 async function cargarInformeSupervision() {
