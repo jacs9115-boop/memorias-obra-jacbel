@@ -870,6 +870,14 @@ function crearObra_(body) {
       filasPres.push([d.nombre, it.capitulo, it.item, it.descripcion, it.unidad, it.cantidadPresupuestada, it.filaOrigen || "", "", ""]);
     });
   });
+  // Texto plano en la columna Item ANTES de escribir los valores -- mismo
+  // fix que ya tenia agregarItemPresupuesto_/editarItemPresupuesto_ (evita
+  // que Sheets convierta numeros como "1.10" al numero 1.1, recortando el
+  // cero final y chocando con un item "1.1" real), pero que se habia
+  // quedado sin aplicar aca, en la escritura inicial al crear la obra --
+  // por eso el problema aparecia "de una" en obras recien creadas, en
+  // cualquier direccion que tuviera un item terminado en 0 (X.10, X.20...).
+  if (filasPres.length > 1) hojaPres.getRange(2, 3, filasPres.length - 1, 1).setNumberFormat("@");
   hojaPres.getRange(1, 1, filasPres.length, 9).setValues(filasPres);
   hojaPres.getRange(1, 1, 1, 9).setFontWeight("bold");
   hojaPres.setFrozenRows(1);
@@ -992,6 +1000,11 @@ function guardarMedida_(body) {
     body.longitud || "", body.ancho || "", body.alto || "", body.volumen || "", body.distanciaKm || "",
     Number(body.cantidad) || 0, subida.urls.join("|"), body.observacion || "",
   ];
+  // Texto plano en Item ANTES de escribir (mismo fix que en Presupuesto/
+  // Ejecucion Real): sin esto, Sheets convierte "1.10" al numero 1.1 y esa
+  // medida queda contando contra el item equivocado.
+  var filaDestino = hoja.getLastRow() + 1;
+  hoja.getRange(filaDestino, 4).setNumberFormat("@");
   hoja.appendRow(fila);
   // No se reconstruyen aqui "Memoria de Calculo" / "Registro Fotografico" /
   // "Ejecucion Real" (eso es lo que hacia sentir lento el guardado). En vez
@@ -1034,7 +1047,9 @@ function copiarMedidas_(body) {
       Number(m.cantidad) || 0, "", m.observacion || "",
     ];
   });
-  hoja.getRange(hoja.getLastRow() + 1, 1, filas.length, 14).setValues(filas);
+  var filaInicio = hoja.getLastRow() + 1;
+  hoja.getRange(filaInicio, 4, filas.length, 1).setNumberFormat("@"); // ver nota de Item en guardarMedida_
+  hoja.getRange(filaInicio, 1, filas.length, 14).setValues(filas);
   marcarObraPendiente_(body.obraId); // ver nota en guardarMedida_
 
   return { ok: true, ids: idsCreadas, cantidad: idsCreadas.length };
@@ -1054,7 +1069,7 @@ function editarMedida_(body) {
     if (ids[i][0] === body.medidaId) {
       var fila = i + 2;
       hoja.getRange(fila, 3).setValue(body.direccion || "");
-      hoja.getRange(fila, 4).setValue(body.item || "");
+      hoja.getRange(fila, 4).setNumberFormat("@").setValue(body.item || ""); // ver nota de Item en guardarMedida_
       hoja.getRange(fila, 5).setValue(body.descripcion || "");
       hoja.getRange(fila, 6).setValue(body.unidad || "");
       hoja.getRange(fila, 7).setValue(body.longitud || "");
@@ -2363,6 +2378,13 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
 
   _t.arraysDinamicos = Date.now();
 
+  // Mismo fix que crearObra_/agregarItemPresupuesto_/editarItemPresupuesto_:
+  // texto plano en Item ANTES de escribir, para que Sheets no convierta
+  // numeros como "1.10" al numero 1.1 (recortando el cero final) y choque
+  // con un item "1.1" real de la misma direccion. Esta hoja se reconstruye
+  // completa cada vez (regenerarEjecucionReal_), asi que sin esto el
+  // problema volvia a aparecer aunque ya estuviera bien en "Presupuesto".
+  sh.getRange(DATA_START, COL.ITEM, numFilas, 1).setNumberFormat("@");
   sh.getRange(DATA_START, 1, numFilas, 14).setValues(valoresBase);
   sh.getRange(DATA_START, 1, numFilas, 14).setBackgrounds(backgrounds);
   sh.getRange(DATA_START, 1, numFilas, 14).setFontWeights(negritas);
