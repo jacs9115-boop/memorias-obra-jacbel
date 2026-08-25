@@ -266,16 +266,35 @@ function seccionCronologia_(datos, items) {
   const delPeriodo = (items || []).filter((it) => Number(it.cantidadEjecutadaPeriodo) > 0);
   if (delPeriodo.length) {
     bloques.push(new Paragraph({ spacing: { before: 120, after: 80 }, children: [new TextRun({ text: "ACTIVIDADES DEL CONTRATISTA DE OBRA VERIFICADAS EN CAMPO:", bold: true, size: 20 })] }));
+    // Se agrupa por direccion/frente de obra (en el orden en que aparecen)
+    // para que quede claro que actividad corresponde a cada una -- antes
+    // se listaban todas juntas y no se distinguia el frente de cada item.
+    const direcciones = [];
+    const porDireccion = {};
     delPeriodo.forEach((it) => {
-      bloques.push(new Paragraph({
-        indent: { left: 300 },
-        spacing: { after: 80 },
-        alignment: AlignmentType.JUSTIFIED,
-        children: [new TextRun({
-          text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
-          size: 20,
-        })],
-      }));
+      const clave = it.direccion || "";
+      if (!porDireccion[clave]) { porDireccion[clave] = []; direcciones.push(clave); }
+      porDireccion[clave].push(it);
+    });
+    direcciones.forEach((direccion) => {
+      if (direccion) {
+        bloques.push(new Paragraph({
+          indent: { left: 150 },
+          spacing: { before: 80, after: 40 },
+          children: [new TextRun({ text: direccion, bold: true, underline: { type: UnderlineType.SINGLE }, size: 20 })],
+        }));
+      }
+      porDireccion[direccion].forEach((it) => {
+        bloques.push(new Paragraph({
+          indent: { left: 300 },
+          spacing: { after: 80 },
+          alignment: AlignmentType.JUSTIFIED,
+          children: [new TextRun({
+            text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
+            size: 20,
+          })],
+        }));
+      });
     });
   }
   return bloques;

@@ -9,6 +9,7 @@
 const {
   Document, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel,
   AlignmentType, WidthType, ShadingType, BorderStyle, ImageRun, VerticalAlign,
+  UnderlineType,
 } = require("docx");
 
 const AZUL_OSCURO = "1F4E78";
@@ -171,16 +172,35 @@ function resumenActividadesNarrativo(items) {
     return [parrafo("No se registró ejecución de actividades dentro del periodo reportado.", { italic: true })];
   }
   const bloques = [parrafo("Durante el periodo reportado se ejecutaron y se cobran en la presente acta las siguientes actividades:")];
+  // Agrupado por direccion/frente de obra (en el orden en que aparecen) --
+  // antes se listaban todos los items juntos sin distinguir a que frente
+  // pertenecia cada uno.
+  const direcciones = [];
+  const porDireccion = {};
   delPeriodo.forEach((it) => {
-    bloques.push(new Paragraph({
-      indent: { left: 300 },
-      spacing: { after: 80 },
-      alignment: AlignmentType.JUSTIFIED,
-      children: [new TextRun({
-        text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
-        size: 20,
-      })],
-    }));
+    const clave = it.direccion || "";
+    if (!porDireccion[clave]) { porDireccion[clave] = []; direcciones.push(clave); }
+    porDireccion[clave].push(it);
+  });
+  direcciones.forEach((direccion) => {
+    if (direccion) {
+      bloques.push(new Paragraph({
+        indent: { left: 150 },
+        spacing: { before: 80, after: 40 },
+        children: [new TextRun({ text: direccion, bold: true, underline: { type: UnderlineType.SINGLE }, size: 20 })],
+      }));
+    }
+    porDireccion[direccion].forEach((it) => {
+      bloques.push(new Paragraph({
+        indent: { left: 300 },
+        spacing: { after: 80 },
+        alignment: AlignmentType.JUSTIFIED,
+        children: [new TextRun({
+          text: `- Item ${it.item} (${fmtNum(it.cantidadEjecutadaPeriodo)} ${it.unidad}) — ${it.descripcionEjecucion || it.descripcion}`,
+          size: 20,
+        })],
+      }));
+    });
   });
   return bloques;
 }
