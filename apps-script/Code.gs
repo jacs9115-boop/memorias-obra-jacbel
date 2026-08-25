@@ -774,18 +774,23 @@ function calcularResumenInforme_(body) {
 
   // Los "items" (y su VR Unitario) representan el COSTO DIRECTO de cada
   // actividad -- lo mismo que "TOTAL COSTOS DIRECTOS TCD" en la hoja
-  // "Ejecucion Real" (ver regenerarEjecucionReal_). Lo que realmente se
-  // cobra en un acta es el COSTO TOTAL (TCD + Administracion 30,4% +
-  // Imprevistos 1% + Utilidad 6%, los mismos porcentajes que ya usa
-  // "Ejecucion Real"), no el TCD solo -- por eso se aplica el mismo
-  // factor antes de devolver los totales.
-  var FACTOR_AIU_ = 1 + 0.304 + 0.01 + 0.06;
+  // "Ejecucion Real" (ver regenerarEjecucionReal_). Lo CONTRATADO (columna
+  // F de esa hoja) si lleva el AIU completo: TCD + Administracion 30,4% +
+  // Imprevistos 1% + Utilidad 6%. Pero lo EJECUTADO (columnas H/J/L de esa
+  // misma hoja) NUNCA incluye el 1% de Imprevistos -- ese renglon se deja
+  // fijo en 0 en Acta anterior/Presente acta/Acumulado (nivel 12 en
+  // regenerarEjecucionReal_: "este usuario normalmente no ejecuta/cobra el
+  // 1% de imprevistos"), solo queda como saldo contratado sin amortizar.
+  // Por eso lo ejecutado (periodo y acumulado) usa un factor distinto, SIN
+  // el 1%, para que el balance de este informe cuadre con "Ejecucion Real".
+  var FACTOR_CONTRATADO_ = 1 + 0.304 + 0.01 + 0.06;
+  var FACTOR_EJECUTADO_ = 1 + 0.304 + 0.06;
 
   return {
     ok: true, items: items, fotos: fotos,
-    totalContratadoVr: totalContratadoVr * FACTOR_AIU_,
-    totalEjecutadoPeriodoVr: totalEjecutadoPeriodoVr * FACTOR_AIU_,
-    totalEjecutadoAcumuladoVr: totalEjecutadoAcumuladoVr * FACTOR_AIU_,
+    totalContratadoVr: totalContratadoVr * FACTOR_CONTRATADO_,
+    totalEjecutadoPeriodoVr: totalEjecutadoPeriodoVr * FACTOR_EJECUTADO_,
+    totalEjecutadoAcumuladoVr: totalEjecutadoAcumuladoVr * FACTOR_EJECUTADO_,
     sinArchivoOficial: !fileId,
   };
 }
