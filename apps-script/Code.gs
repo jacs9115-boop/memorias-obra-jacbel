@@ -1776,7 +1776,6 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
   var merges = [];
   var filasAltura = [];
   var formulasImagen = []; // { fila, formula }
-  var imagenesPendientes = []; // [{fila, idDrive, fotoUrl}] -- se insertan al final, como imagen real
 
   function filaVacia() { return new Array(COLS).fill(""); }
   function agregarFila(vals, opts) {
@@ -1834,9 +1833,9 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
       merges.push({ fila: filaImagen, columnas: COLS });
       filasAltura.push({ fila: filaImagen, altura: 260 });
 
-      var idDrive = idDriveDesdeUrl_(f.fotoUrl);
-      if (idDrive) {
-        imagenesPendientes.push({ fila: filaImagen, idDrive: idDrive, fotoUrl: f.fotoUrl });
+      var miniaturaUrl = miniaturaFoto_(f.fotoUrl);
+      if (miniaturaUrl) {
+        formulasImagen.push({ fila: filaImagen, formula: '=IMAGE("' + miniaturaUrl + '";1)' });
       } else if (f.fotoUrl) {
         formulasImagen.push({ fila: filaImagen, formula: '=HYPERLINK("' + f.fotoUrl + '";"Ver foto")' });
       }
@@ -1861,21 +1860,6 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
   filasAltura.forEach(function (fa) { hoja.setRowHeight(fa.fila, fa.altura); });
   formulasImagen.forEach(function (fi) { hoja.getRange(fi.fila, 1).setFormula(fi.formula); });
 
-  // Insertar cada foto como imagen real (no formula =IMAGE(), que es
-  // exclusiva de Google Sheets y queda en #NOMBRE? si el archivo se
-  // descarga/exporta como Excel). Si una foto puntual falla al
-  // descargarse, se deja el link de Drive como respaldo.
-  imagenesPendientes.forEach(function (ip) {
-    try {
-      var blob = DriveApp.getFileById(ip.idDrive).getBlob();
-      var imagen = hoja.insertImage(blob, 1, ip.fila);
-      imagen.setWidth(380).setHeight(280);
-    } catch (errImagen) {
-      Logger.log("No se pudo incrustar la foto (fila " + ip.fila + "): " + errImagen);
-      hoja.getRange(ip.fila, 1).setFormula('=HYPERLINK("' + ip.fotoUrl + '";"Ver foto")');
-    }
-  });
-
   for (var c = 1; c <= COLS; c++) hoja.setColumnWidth(c, 160);
 
   ss.setActiveSheet(hoja);
@@ -1887,14 +1871,6 @@ function regenerarRegistroFotografico_(ss, fotos, meta) {
 function miniaturaFoto_(fotoUrl) {
   var m = (fotoUrl || "").match(/\/d\/([^/]+)/);
   return m ? "https://drive.google.com/thumbnail?id=" + m[1] + "&sz=w600" : "";
-}
-
-// Extrae el ID de archivo de Drive de una URL "…/d/<id>/…" (mismo patron
-// que miniaturaFoto_, pero aca hace falta el ID solo para pedirle el blob
-// real a DriveApp, no la URL de miniatura).
-function idDriveDesdeUrl_(fotoUrl) {
-  var m = (fotoUrl || "").match(/\/d\/([^/]+)/);
-  return m ? m[1] : "";
 }
 
 // ---------- Ejecucion Real (presupuesto oficial con precios vs ejecutado) ----------
