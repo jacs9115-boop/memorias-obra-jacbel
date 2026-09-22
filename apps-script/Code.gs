@@ -202,6 +202,40 @@ function extraerValorConDosPuntos_(texto) {
   return texto.substring(idx + 1).trim();
 }
 
+function esEncabezadoUnidad_(t) {
+  return t === "UND" || t === "UNIDAD" || t === "UN" || t === "UNID";
+}
+
+// Ubica cada fila de encabezado "ITEM | DESCRIPCION | UND" y la COLUMNA
+// donde arranca. No todos los presupuestos la tienen en la columna B: el
+// del contrato 085-26 (Guacari), por ejemplo, la trae corrida a la
+// columna C, y antes eso hacia que no se encontrara ninguna tabla ("0
+// direcciones"). Por eso todas las lecturas por columna se hacen relativas
+// a esta columna (col = ITEM, col+1 = DESCRIPCION, col+2 = UND, col+3 =
+// CANT., col+4 = VR. UNITARIO, col+5 = VR. PARCIAL).
+function ubicarEncabezadosTabla_(filas) {
+  var res = [];
+  for (var i = 0; i < filas.length; i++) {
+    var fila = filas[i] || [];
+    for (var c = 0; c + 2 < fila.length; c++) {
+      if (normalizarEncabezadoTabla_(fila[c]) === "ITEM" &&
+          normalizarEncabezadoTabla_(fila[c + 1]) === "DESCRIPCION" &&
+          esEncabezadoUnidad_(normalizarEncabezadoTabla_(fila[c + 2]))) {
+        res.push({ fila: i, col: c });
+        break;
+      }
+    }
+  }
+  return res;
+}
+
+function filaTablaVacia_(fila, col) {
+  for (var k = col; k < col + 6; k++) {
+    if (normalizarTexto_((fila || [])[k])) return false;
+  }
+  return true;
+}
+
 function parsearPresupuesto_(fileId) {
   var filas = convertirYLeer_(fileId);
 
@@ -215,7 +249,10 @@ function parsearPresupuesto_(fileId) {
       if (!t) continue;
       var up = t.toUpperCase();
       if (up.indexOf("CONTRATO DE OBRA") === 0) {
-        var m = /No\.?\s*(.+)/i.exec(t);
+        // "No. 085-26", "Nº 085-26" o "N° 085-26" (el numero limpio es lo
+        // que se usa para encontrar el presupuesto oficial por nombre de
+        // archivo en buscarPresupuestoOficialPorContrato_).
+        var m = /N(?:o\.?|º|°)\s*(.+)/i.exec(t);
         meta.numeroContrato = m ? m[1].trim() : t;
       } else if (up.indexOf("OBJETO") === 0) {
         meta.objeto = extraerValorConDosPuntos_(t);
@@ -233,31 +270,55 @@ function parsearPresupuesto_(fileId) {
     }
   }
 
-  var encabezados = [];
-  for (var i = 0; i < filas.length; i++) {
-    var b = normalizarEncabezadoTabla_(filas[i][1]);
-    var c2 = normalizarEncabezadoTabla_(filas[i][2]);
-    var d = normalizarEncabezadoTabla_(filas[i][3]);
-    if (b === "ITEM" && c2 === "DESCRIPCION" && d === "UND") encabezados.push(i);
-  }
+  var encabezados = ubicarEncabezadosTabla_(filas);
+  var advertencias = [];
 
   var direcciones = [];
-  encabezados.forEach(function (hi, idx) {
-    var fin = idx + 1 < encabezados.length ? encabezados[idx + 1] : filas.length;
-    var nombreDir = hi + 1 < fin ? normalizarTexto_(filas[hi + 1][2]) : ("Dirección " + (idx + 1));
+  encabezados.forEach(function (enc, idx) {
+    var hi = enc.fila, col = enc.col;
+    var fin = idx + 1 < encabezados.length ? encabezados[idx + 1].fila : filas.length;
+
+    // El nombre de la direccion es la primera fila con texto despues del
+    // encabezado (puede haber filas vacias en medio), siempre que no sea
+    // ya un capitulo/item (esos tienen numero en ITEM). Segun el archivo
+    // viene en la columna DESCRIPCION (con ITEM vacio) o directamente en
+    // la columna ITEM. Si no hay fila de nombre (contrato de una sola
+    // direccion sin titulo), los items arrancan de una vez.
+    var inicioItems = hi + 1;
+    while (inicioItems < fin && filaTablaVacia_(filas[inicioItems], col)) inicioItems++;
+    var nombreDir = "";
+    if (inicioItems < fin) {
+      var fn = filas[inicioItems] || [];
+      var itTxt = normalizarTexto_(fn[col]), dsTxt = normalizarTexto_(fn[col + 1]);
+      var esFilaNombre = !esNumero_(fn[col + 3]) && !esNumero_(fn[col + 4]) && !/^\d+(\.\d+)*$/.test(itTxt);
+      if (esFilaNombre) {
+        nombreDir = itTxt || dsTxt;
+        inicioItems++;
+      }
+    }
     if (!nombreDir) nombreDir = "Dirección " + (idx + 1);
+
     var items = [];
+    var vistos = {};
     var capituloActual = "";
-    for (var i2 = hi + 2; i2 < fin; i2++) {
+    for (var i2 = inicioItems; i2 < fin; i2++) {
       var fila = filas[i2] || [];
-      var itemVal = normalizarTexto_(fila[1]);
-      var descVal = normalizarTexto_(fila[2]);
-      var undVal = normalizarTexto_(fila[3]);
-      var cantVal = fila[4];
-      var vrUnitVal = fila[5];
+      var itemVal = normalizarTexto_(fila[col]);
+      var descVal = normalizarTexto_(fila[col + 1]);
+      var undVal = normalizarTexto_(fila[col + 2]);
+      var cantVal = fila[col + 3];
+      var vrUnitVal = fila[col + 4];
       if (!itemVal) continue;
       var esItemReal = esNumero_(cantVal) && esNumero_(vrUnitVal);
       if (esItemReal) {
+        // Dos items con el mismo numero en la misma direccion (error de
+        // digitacion del presupuesto, ej. dos "7.5") chocan entre si: la
+        // app identifica cada item por direccion + numero, asi que las
+        // medidas de uno se sumarian al otro. Se avisa para corregirlo.
+        if (vistos[itemVal]) {
+          advertencias.push("El item " + itemVal + " está repetido en \"" + nombreDir + "\" (fila " + (i2 + 1) + " del Excel). Corrige la numeración en el archivo antes de crear la obra.");
+        }
+        vistos[itemVal] = true;
         items.push({
           item: itemVal,
           descripcion: descVal,
@@ -277,7 +338,7 @@ function parsearPresupuesto_(fileId) {
     direcciones.push({ nombre: nombreDir, items: items });
   });
 
-  return { meta: meta, direcciones: direcciones };
+  return { meta: meta, direcciones: direcciones, advertencias: advertencias };
 }
 
 // ---------- Indice de obras (hoja "Obras" de este mismo spreadsheet) ----------
@@ -828,6 +889,17 @@ function crearObra_(body) {
   var nombreObra = normalizarTexto_(body.nombreObra) || "Obra sin nombre";
   var datos = parsearPresupuesto_(fileId);
 
+  // Si el archivo no se pudo leer, no se crea una obra vacia (antes quedaba
+  // creada igual, con 0 direcciones, y habia que borrarla a mano).
+  var totalItems = datos.direcciones.reduce(function (s, d) { return s + d.items.length; }, 0);
+  if (!datos.direcciones.length || !totalItems) {
+    return {
+      ok: false,
+      error: "No se encontraron items en el presupuesto. Revisa que tenga una fila de encabezado " +
+        "\"ITEM | DESCRIPCION | UND | CANT. | VR. UNITARIO\" y que cada item tenga cantidad y valor unitario numéricos.",
+    };
+  }
+
   var ss = SpreadsheetApp.create(nombreObra + " - Memoria de Cálculo");
   var ssId = ss.getId();
 
@@ -900,7 +972,7 @@ function crearObra_(body) {
   hojaIndice.appendRow([obraId, nombreObra, ssId, datos.meta.numeroContrato, datos.meta.objeto,
     datos.meta.contratista, datos.meta.supervisor, new Date().toISOString(), fileId]);
 
-  return { ok: true, obraId: obraId, totalDirecciones: datos.direcciones.length };
+  return { ok: true, obraId: obraId, totalDirecciones: datos.direcciones.length, advertencias: datos.advertencias };
 }
 
 function borrarObra_(body) {
@@ -1439,9 +1511,13 @@ function actualizarFilaPresupuestoOriginal_(fileId, filaOrigen, cambios) {
     if (hojaTemp.getLastRow() < filaOrigen) {
       throw new Error("El archivo original ya no tiene esa fila (¿cambió su estructura?)");
     }
-    if (cambios.item) hojaTemp.getRange(filaOrigen, 2).setValue(cambios.item);
-    if (cambios.descripcion) hojaTemp.getRange(filaOrigen, 3).setValue(cambios.descripcion);
-    if (cambios.unidad) hojaTemp.getRange(filaOrigen, 4).setValue(cambios.unidad);
+    // Columna (1-based) de ITEM en este archivo -- no siempre es la B (ver
+    // ubicarEncabezadosTabla_).
+    var encs = ubicarEncabezadosTabla_(hojaTemp.getDataRange().getValues());
+    var colItem = (encs.length ? encs[0].col : 1) + 1;
+    if (cambios.item) hojaTemp.getRange(filaOrigen, colItem).setValue(cambios.item);
+    if (cambios.descripcion) hojaTemp.getRange(filaOrigen, colItem + 1).setValue(cambios.descripcion);
+    if (cambios.unidad) hojaTemp.getRange(filaOrigen, colItem + 2).setValue(cambios.unidad);
     SpreadsheetApp.flush();
 
     var blobExportado = DriveApp.getFileById(convertido.id).getAs(MimeType.MICROSOFT_EXCEL);
@@ -1948,16 +2024,23 @@ var AIU_KEYWORDS_ = ["TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "
 // solo se muestra de forma informativa (sin ejecucion).
 function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
   var filasRaw = convertirYLeerCacheado_(fileId);
-  var startIdx = -1;
-  for (var i = 0; i < filasRaw.length; i++) {
-    if (normalizarTexto_(filasRaw[i][1]) === "ITEM") { startIdx = i + 1; break; }
+  var encs = ubicarEncabezadosTabla_(filasRaw);
+  if (!encs.length) {
+    // Encabezado con otros titulos: se mantiene la busqueda anterior (solo
+    // "ITEM" en la columna B).
+    for (var i0 = 0; i0 < filasRaw.length; i0++) {
+      if (normalizarTexto_(filasRaw[i0][1]) === "ITEM") { encs = [{ fila: i0, col: 1 }]; break; }
+    }
   }
-  if (startIdx === -1) throw new Error("No se encontro la fila de encabezado ITEM en el presupuesto oficial");
+  if (!encs.length) throw new Error("No se encontro la fila de encabezado ITEM en el presupuesto oficial");
+  var startIdx = encs[0].fila + 1;
+  var col = encs[0].col;
 
   var filas = [];
   var direccionCtx = "";
   for (var i = startIdx; i < filasRaw.length; i++) {
-    var item = filasRaw[i][1], desc = filasRaw[i][2], und = filasRaw[i][3], cant = filasRaw[i][4], vrUnit = filasRaw[i][5], vrParcial = filasRaw[i][6];
+    var fr = filasRaw[i];
+    var item = fr[col], desc = fr[col + 1], und = fr[col + 2], cant = fr[col + 3], vrUnit = fr[col + 4], vrParcial = fr[col + 5];
     var itemTxt = (item === "" || item === null || item === undefined) ? "" : String(item);
     var undTxt = normalizarTexto_(und);
     var descTxt = normalizarTexto_(desc);
@@ -1967,6 +2050,11 @@ function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
     var esAIU = AIU_KEYWORDS_.some(function (k) { return descTxt.toUpperCase().indexOf(k) === 0; });
     var nivel;
     if (itemTxt === "" && undTxt === "" && esDireccionConocida) { nivel = 0; direccionCtx = descTxt; }
+    // Algunos archivos (ej. contrato 085-26) traen el nombre de la
+    // direccion en la columna ITEM, con DESCRIPCION vacia.
+    else if (descTxt === "" && undTxt === "" && direccionesConocidas[normalizarTexto_(itemTxt)]) {
+      nivel = 0; direccionCtx = normalizarTexto_(itemTxt); descTxt = direccionCtx; itemTxt = "";
+    }
     else if (itemTxt === "" && undTxt === "" && esAIU) { nivel = 4; }
     else if (itemTxt === "" && undTxt === "") { continue; }
     else if (undTxt === "" && /^\d+(\.0)?$/.test(itemTxt)) { nivel = 1; }
@@ -1986,13 +2074,18 @@ function leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas) {
 var ETIQUETAS_CIERRE_OFICIAL_ = [
   "COSTO DIRECTO OBRA", "TOTAL COSTOS DIRECTOS", "ADMINISTRACION", "IMPREVISTOS", "UTILIDAD",
   "COSTO TOTAL OBRA", "COSTO TOTAL PROYECTO",
+  // Variantes cortas del contrato 085-26 ("COSTOS DIRECTOS" / "COSTO TOTAL").
+  "COSTOS DIRECTOS", "COSTO TOTAL",
 ];
 // Revisa tanto el item como la descripcion: el archivo oficial no siempre
 // pone la etiqueta de cierre en la misma columna (a veces "COSTO DIRECTO
 // OBRA"/"COSTO TOTAL PROYECTO" quedan en la columna ITEM en vez de
 // DESCRIPCION, lo que antes hacia que esta fila se colara sin filtrar).
 function esFilaDeCierreOficial_(item, descripcion) {
-  var texto = ((item || "") + " " + (descripcion || "")).toUpperCase();
+  // Sin tildes: el archivo puede traer "Administración" en vez de "ADMINISTRACION".
+  var texto = ((item || "") + " " + (descripcion || "")).toUpperCase()
+    .replace(/[ÁÀÄ]/g, "A").replace(/[ÉÈË]/g, "E").replace(/[ÍÌÏ]/g, "I")
+    .replace(/[ÓÒÖ]/g, "O").replace(/[ÚÙÜ]/g, "U");
   return ETIQUETAS_CIERRE_OFICIAL_.some(function (e) { return texto.indexOf(e) !== -1; });
 }
 

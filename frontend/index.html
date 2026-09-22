@@ -508,7 +508,13 @@ function renderPreview() {
     <div style="margin-top:10px">
       ${previewData.direcciones.map((d) => `<div style="font-size:12.5px;padding:4px 0;color:var(--muted)">• ${d.nombre} (${d.items.length} items)</div>`).join("")}
     </div>
+    ${(previewData.advertencias || []).length ? `
+    <div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#FFF4E5;color:#8A5300;font-size:12.5px">
+      <b>⚠️ Revisa antes de crear la obra:</b>
+      ${previewData.advertencias.map((a) => `<div style="padding-top:4px">• ${a}</div>`).join("")}
+    </div>` : ""}
   `;
+  document.getElementById("btnCrearObra").disabled = totalItems === 0;
 }
 
 document.getElementById("btnCrearObra").addEventListener("click", async () => {
