@@ -2537,11 +2537,12 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 1) + "*0.304"; });
     } else if (f.nivel === 12) {
       // IMPREVISTOS (1% DEL TCD): 2 filas arriba (TOTAL COSTOS DIRECTOS TCD).
-      // Este usuario no ejecuta/cobra el 1% de imprevistos: por pedido suyo
-      // va SOLO en SALDO / VR. TOTAL (N), calculado sobre el TCD contratado;
-      // las demas columnas de esta fila quedan vacias.
+      // Este usuario no ejecuta/cobra el 1% de imprevistos: va en
+      // CONTRATADO / VR. PARCIAL (F) y en SALDO / VR. TOTAL (N); las columnas
+      // de ejecutado (H, J, L) quedan vacias.
       var filaTCD12_ = row - 2;
-      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + filaTCD12_ + "*0.01";
+      dinamico[idx][COL.CVP] = "=" + colLetraEjecucionReal_(COL.CVP) + filaTCD12_ + "*0.01";
+      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row;
     } else if (f.nivel === 13) {
       // UTILIDAD (6% DEL TCD): 3 filas arriba (TOTAL COSTOS DIRECTOS TCD).
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 3) + "*0.06"; });
