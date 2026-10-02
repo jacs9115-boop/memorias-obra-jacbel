@@ -1009,6 +1009,7 @@ function leerObra_(obraId) {
   if (!obra) throw new Error("Obra no encontrada");
 
   var ss = SpreadsheetApp.openById(obra.spreadsheetId);
+  try { repararObraCorrupta_(ss); } catch (eRep) { Logger.log("No se pudo reparar tildes: " + eRep); }
 
   var hojaPres = ss.getSheetByName("Presupuesto");
   var ultimaFilaPres = hojaPres.getLastRow();
@@ -1542,6 +1543,7 @@ function actualizarFilaPresupuestoOriginal_(fileId, filaOrigen, cambios) {
 // fila exacta en la hoja "Registro Fotografico", que es donde se ve la
 // foto en grande.
 function regenerarMemoriaCalculo_(ss) {
+  try { repararObraCorrupta_(ss); } catch (eRep) { Logger.log("No se pudo reparar tildes: " + eRep); }
   var _t = { inicio: Date.now() };
   var NOMBRE_HOJA = "Memoria de Cálculo";
   var COLS = 9;
@@ -1814,6 +1816,77 @@ function calcularCantidadParcial_(tipo, m) {
   return calcularBase_(tipo, m) * (Number(m.cantidad) || 1);
 }
 
+// ---------- Reparar tildes corruptas ("C√°lculo" -> "Cálculo") ----------
+//
+// Si este archivo se copia al portapapeles sin UTF-8 (pbcopy sin LANG), las
+// tildes quedan como texto MacRoman: "á" -> "√°", "º" -> "¬∫", "—" ->
+// "‚Äî". Esa version pegada escribio asi los nombres de hojas, el titulo y
+// las claves de "Config" en las obras ya creadas; esto los devuelve a su
+// forma correcta. Tabla y patrones en \u para que este bloque sobreviva
+// aunque el archivo se vuelva a copiar mal.
+var MAC_ROMAN_ALTOS_ = "ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø¿¡¬√ƒ≈∆«»… ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›ﬁﬂ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ";
+
+function escaparClaseRegex_(s) { return s.replace(/[\\\]\[\-\^]/g, "\\$&"); }
+
+var RE_TEXTO_CORRUPTO_ = (function () {
+  var cont = "[" + escaparClaseRegex_(MAC_ROMAN_ALTOS_.slice(0, 64)) + "]";      // bytes 80-BF
+  var lead2 = "[" + escaparClaseRegex_(MAC_ROMAN_ALTOS_.slice(66, 96)) + "]";    // bytes C2-DF
+  var lead3 = "[" + escaparClaseRegex_(MAC_ROMAN_ALTOS_.slice(96, 112)) + "]";   // bytes E0-EF
+  return new RegExp(lead3 + cont + cont + "|" + lead2 + cont, "g");
+})();
+
+function repararTextoCorrupto_(s) {
+  if (typeof s !== "string" || !s) return s;
+  return s.replace(RE_TEXTO_CORRUPTO_, function (seq) {
+    var b = [];
+    for (var i = 0; i < seq.length; i++) b.push(0x80 + MAC_ROMAN_ALTOS_.indexOf(seq.charAt(i)));
+    var cp = b.length === 2 ? ((b[0] & 0x1F) << 6) | (b[1] & 0x3F)
+      : ((b[0] & 0x0F) << 12) | ((b[1] & 0x3F) << 6) | (b[2] & 0x3F);
+    if (cp < 0x80 || (b.length === 3 && cp < 0x800)) return seq;
+    return String.fromCharCode(cp);
+  });
+}
+
+// Una sola vez por obra (marca en PropertiesService): titulo, nombres de
+// hojas (si ya existe la hoja con el nombre correcto, la corrupta es una
+// copia vieja de un reporte y se borra), "Config" completa y la fila de
+// encabezados de "Presupuesto"/"Memoria".
+function repararObraCorrupta_(ss) {
+  var props = PropertiesService.getScriptProperties();
+  var clave = "textoReparado_" + ss.getId();
+  if (props.getProperty(clave)) return;
+
+  var titulo = ss.getName(), tituloOk = repararTextoCorrupto_(titulo);
+  if (tituloOk !== titulo) ss.rename(tituloOk);
+
+  ss.getSheets().forEach(function (hoja) {
+    var nombre = hoja.getName(), nombreOk = repararTextoCorrupto_(nombre);
+    if (nombreOk === nombre) return;
+    if (ss.getSheetByName(nombreOk)) ss.deleteSheet(hoja);
+    else hoja.setName(nombreOk);
+  });
+
+  function repararRango(rango) {
+    var valores = rango.getValues(), cambio = false;
+    var nuevos = valores.map(function (fila) {
+      return fila.map(function (v) {
+        var ok = repararTextoCorrupto_(v);
+        if (ok !== v) cambio = true;
+        return ok;
+      });
+    });
+    if (cambio) rango.setValues(nuevos);
+  }
+  var config = ss.getSheetByName("Config");
+  if (config && config.getLastRow() > 0) repararRango(config.getRange(1, 1, config.getLastRow(), Math.max(2, config.getLastColumn())));
+  ["Presupuesto", "Memoria"].forEach(function (n) {
+    var h = ss.getSheetByName(n);
+    if (h && h.getLastColumn() > 0) repararRango(h.getRange(1, 1, 1, h.getLastColumn()));
+  });
+
+  props.setProperty(clave, "1");
+}
+
 function leerMetaContrato_(ss) {
   var hoja = ss.getSheetByName("Config");
   var valores = hoja.getRange(1, 1, 5, 2).getValues();
@@ -1961,15 +2034,26 @@ function miniaturaFoto_(fotoUrl) {
 // contenga el numero de contrato de esta obra. Ese archivo es el
 // presupuesto OFICIAL con valores unitarios, un documento aparte que el
 // usuario sube manualmente a esa carpeta (no lo genera la app).
+// El numero de contrato guardado puede venir completo ("CONTRATO DE OBRA
+// Nº 085-26") mientras el archivo se llama distinto ("PRESUPUESTO ...
+// CONTRATO 085-26.xlsx"), por eso ademas del texto completo se compara
+// solo el numero ("085-26"), sin que pueda coincidir con "1085-26".
 function buscarPresupuestoOficialPorContrato_(numeroContrato) {
   if (!numeroContrato) return null;
+  var texto = String(numeroContrato);
+  var m = /(\d+)\s*-\s*(\d+)/.exec(texto);
+  var reNumero = m ? new RegExp("(^|[^0-9])" + m[1] + "\\s*-\\s*" + m[2] + "([^0-9]|$)") : null;
   var folder = DriveApp.getFolderById(carpetaPresupuestos_());
   var files = folder.getFiles();
+  var mejor = null;
   while (files.hasNext()) {
     var f = files.next();
-    if (f.getName().indexOf(numeroContrato) !== -1) return f.getId();
+    var nombre = f.getName();
+    if (nombre.indexOf("(cache interno)") === 0) continue;
+    if (nombre.indexOf(texto) === -1 && !(reNumero && reNumero.test(nombre))) continue;
+    if (!mejor || f.getLastUpdated() > mejor.getLastUpdated()) mejor = f;
   }
-  return null;
+  return mejor ? mejor.getId() : null;
 }
 
 // regenerarEjecucionReal_ se ejecuta en CADA guardado de medida (a traves de
