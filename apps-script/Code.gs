@@ -2505,12 +2505,14 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       for (var j = idx + 1; j < numFilas; j++) { if (filas[j].nivel <= 1 || filas[j].nivel >= 10) { finRel = j; break; } }
       var filaIni = DATA_START + idx + 1;
       var filaFin = DATA_START + finRel - 1;
+      // Solo plata: el VR. PARCIAL contratado del capitulo se suma de sus
+      // items (el archivo del contrato 085-26 no trae ese subtotal, y sin
+      // esto el TCD contratado quedaba en $0 y el saldo en negativo). Las
+      // cantidades no se suman: mezclan unidades (M3 + ML + Un).
       if (filaFin >= filaIni) {
-        dinamico[idx][COL.PCANT] = "=SUM(" + colLetraEjecucionReal_(COL.PCANT) + filaIni + ":" + colLetraEjecucionReal_(COL.PCANT) + filaFin + ")";
+        dinamico[idx][COL.CVP] = "=SUM(" + colLetraEjecucionReal_(COL.CVP) + filaIni + ":" + colLetraEjecucionReal_(COL.CVP) + filaFin + ")";
         dinamico[idx][COL.PVR] = "=SUM(" + colLetraEjecucionReal_(COL.PVR) + filaIni + ":" + colLetraEjecucionReal_(COL.PVR) + filaFin + ")";
-        dinamico[idx][COL.TCANT] = "=" + colLetraEjecucionReal_(COL.ACANT) + row + "+" + colLetraEjecucionReal_(COL.PCANT) + row;
         dinamico[idx][COL.TVR] = "=" + colLetraEjecucionReal_(COL.AVR) + row + "+" + colLetraEjecucionReal_(COL.PVR) + row;
-        dinamico[idx][COL.SCANT] = "=" + colLetraEjecucionReal_(COL.CCANT) + row + "-" + colLetraEjecucionReal_(COL.TCANT) + row;
         dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row + "-" + colLetraEjecucionReal_(COL.TVR) + row;
       }
     } else if (f.nivel === 10) {
