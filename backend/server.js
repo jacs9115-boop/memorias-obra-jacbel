@@ -313,9 +313,10 @@ async function leerDocumentoInformeConIA_(tipo, base64Data, mediaType) {
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
     : { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64Data } };
 
-  // Las aprobaciones de polizas son tablas escaneadas (a veces giradas) que
-  // Haiku lee a medias: van directo al modelo grande.
-  const intentos = tipo === "polizas" ? [CLAUDE_MODEL_REINTENTO, CLAUDE_MODEL] : [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
+  // Son pocos documentos por obra y casi siempre escaneados: Haiku confundia
+  // digitos ("085-26" -> "065-26") y leia a medias las tablas de polizas
+  // (a veces giradas), asi que van directo al modelo grande.
+  const intentos = [CLAUDE_MODEL_REINTENTO, CLAUDE_MODEL];
   let ultimoExtraido = null;
   for (let i = 0; i < intentos.length; i++) {
     try {
@@ -495,6 +496,13 @@ app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("arc
     let extraido = null;
     let guardado = false;
     if (lectura.extraido) {
+      // El numero de contrato de la obra (del presupuesto) manda sobre el
+      // leido del escaneo.
+      if (lectura.extraido.numeroContrato) {
+        const obraData = await llamarAppsScript(`${APPS_SCRIPT_URL}?obra=${encodeURIComponent(req.params.obraId)}`).catch(() => null);
+        const m = /(\d+\s*-\s*\d+)/.exec(String((obraData && obraData.obra && obraData.obra.numeroContrato) || ""));
+        if (m) lectura.extraido.numeroContrato = m[1].replace(/\s/g, "");
+      }
       extraido = {};
       (CAMPOS_POR_DOCUMENTO_[tipo] || []).forEach((campo) => {
         const v = lectura.extraido[campo];
