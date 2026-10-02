@@ -331,7 +331,9 @@ function parsearPresupuesto_(fileId) {
           // fila en el archivo .xls/.xlsx tal como Drive lo convierte.
           filaOrigen: i2 + 1,
         });
-      } else {
+      } else if (!/^\d+\.0*[1-9]\d*$/.test(itemVal)) {
+        // "1.4 SEÑALIZACION" (numero de item, sin cantidad ni precio) es un
+        // subtitulo dentro del capitulo actual, no un capitulo nuevo.
         capituloActual = descVal;
       }
     }
@@ -786,13 +788,20 @@ function calcularResumenInforme_(body) {
   // aparte (igual que en regenerarEjecucionReal_); los agregados desde la
   // app (Origen="APP") ya traen su propio VR Unitario en la misma hoja
   // Presupuesto.
+  // Capitulos: tambien del archivo oficial (filas "1.0 PRELIMINARES", "2.0
+  // EXCAVACIONES"...), por el numero antes del punto de cada item. La
+  // columna Capitulo de la hoja Presupuesto puede traer un subtitulo (ej.
+  // "1.4 SEÑALIZACION" dentro de PRELIMINARES) y los items agregados desde
+  // la app no traen ninguno.
   var preciosOficiales = {};
+  var capitulosOficiales = {};
   var fileId = buscarPresupuestoOficialPorContrato_(obra.numeroContrato);
   if (fileId) {
     var direccionesConocidas = {};
     filasPres.forEach(function (r) { if (r[0]) direccionesConocidas[normalizarTexto_(r[0])] = true; });
     leerPresupuestoOficialConPrecios_(fileId, direccionesConocidas).forEach(function (f) {
       if (f.nivel === 3) preciosOficiales[f.direccion + "||" + f.item] = f.vrUnit;
+      if (f.nivel === 1) capitulosOficiales[f.direccion + "||" + String(f.item).split(".")[0]] = f.descripcion;
     });
   }
 
@@ -814,7 +823,7 @@ function calcularResumenInforme_(body) {
     totalEjecutadoAcumuladoVr += vrAcumulado;
     if (cantidadContratada || cantPeriodo || cantAcumulado) {
       items.push({
-        direccion: r[0], capitulo: normalizarTexto_(r[1]), item: item, descripcion: normalizarTexto_(r[3]), unidad: normalizarTexto_(r[4]),
+        direccion: r[0], capitulo: capitulosOficiales[direccion + "||" + item.split(".")[0]] || normalizarTexto_(r[1]), item: item, descripcion: normalizarTexto_(r[3]), unidad: normalizarTexto_(r[4]),
         cantidadContratada: cantidadContratada, vrUnitario: vrUnitario,
         cantidadEjecutadaPeriodo: cantPeriodo, vrEjecutadoPeriodo: vrPeriodo,
         cantidadEjecutadaAcumulada: cantAcumulado, vrEjecutadoAcumulado: vrAcumulado,

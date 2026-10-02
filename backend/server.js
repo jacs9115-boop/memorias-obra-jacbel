@@ -14,7 +14,7 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 // barato), y si la lectura queda incompleta se reintenta una vez con Sonnet
 // antes de rendirse y devolver lo mejor que se haya podido leer.
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-haiku-4-5-20251001";
-const CLAUDE_MODEL_REINTENTO = process.env.CLAUDE_MODEL_REINTENTO || "claude-sonnet-5";
+const CLAUDE_MODEL_REINTENTO = process.env.CLAUDE_MODEL_REINTENTO || "claude-sonnet-5-5";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
@@ -239,7 +239,7 @@ const PROMPT_POR_TIPO_DOCUMENTO = {
   "fechaTerminacionInicial": "YYYY-MM-DD"
 }
 Reglas: "valorInicial" es el valor del contrato en pesos colombianos (COP), numero entero sin puntos ni comas ni simbolo de moneda -- si no aparece en el acta, deja 0. "fechaTerminacionInicial" normalmente se calcula sumando el plazo a la fecha del acta si no aparece explicita -- si no puedes determinarla con confianza, deja "". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible o no aparece, usa "" (o 0 para valorInicial) solo en ese campo, sin inventar.`,
-  polizas: `Estas leyendo un documento de aprobacion de polizas/garantias de un contrato de obra publica en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
+  polizas: `Estas leyendo un documento de aprobacion de polizas/garantias de un contrato de obra publica en Colombia (puede ser una foto o un PDF, muchas veces escaneado GIRADO 90 grados y con letra pequeña: leelo en la orientacion correcta y revisa la tabla de amparos con cuidado, fila por fila). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
 {
   "polizaCumplimiento": "numero de la poliza de cumplimiento",
   "polizaResponsabilidadCivil": "numero de la poliza de responsabilidad civil extracontractual",
@@ -248,7 +248,7 @@ Reglas: "valorInicial" es el valor del contrato en pesos colombianos (COP), nume
     { "tipo": "nombre del amparo, ej Cumplimiento, Calidad, Estabilidad, Pago de Salarios y Prestaciones, Responsabilidad Civil Extracontractual", "porcentaje": 10, "valorAsegurado": 12345678, "vigenciaDesde": "YYYY-MM-DD", "vigenciaHasta": "YYYY-MM-DD" }
   ]
 }
-Reglas: incluye en "amparos" TODOS los amparos/coberturas que encuentres en el documento, uno por elemento del arreglo (usualmente son varios: cumplimiento, calidad, estabilidad, salarios y prestaciones, responsabilidad civil, etc). "porcentaje" es el % del valor del contrato que cubre ese amparo, como numero (sin simbolo %). "valorAsegurado" es el valor asegurado de ese amparo en pesos colombianos (COP), numero entero. Si el documento tiene varias polizas (cumplimiento y responsabilidad civil por separado, cada una con sus propios amparos), junta todos los amparos de ambas en el mismo arreglo. Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible, usa "" (o 0 para los numericos) solo en ese campo, sin inventar. Si no encuentras ningun amparo, usa un arreglo vacio [].`,
+Reglas: incluye en "amparos" TODOS los amparos/coberturas que encuentres en el documento, uno por elemento del arreglo (usualmente son varios: cumplimiento, buen manejo del anticipo, calidad, estabilidad, salarios y prestaciones, responsabilidad civil, etc), cada uno con su valor asegurado y sus fechas de vigencia desde/hasta (en estas tablas suelen estar en las columnas "Valor asegurado", "Vigencia desde" y "Vigencia hasta"). "porcentaje" es el % del valor del contrato que cubre ese amparo, como numero (sin simbolo %). "valorAsegurado" es el valor asegurado de ese amparo en pesos colombianos (COP), numero entero. Si el documento tiene varias polizas (cumplimiento y responsabilidad civil por separado, cada una con sus propios amparos), junta todos los amparos de ambas en el mismo arreglo. Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo especifico es ilegible, usa "" (o 0 para los numericos) solo en ese campo, sin inventar. Si no encuentras ningun amparo, usa un arreglo vacio [].`,
   contrato: `Estas leyendo el contrato (o su primera pagina/resumen) de una obra publica en Colombia (puede ser una foto o un PDF). Extrae estos datos y responde UNICAMENTE con un JSON valido, sin texto adicional, con esta forma exacta:
 {
   "numeroContrato": "numero o codigo del contrato",
@@ -272,38 +272,55 @@ Reglas: "valorAnticipo" es el valor pagado/cobrado como anticipo en pesos colomb
 Reglas: junta el numero y la fecha del memorando en un solo texto para "supervisorDesignacion". Responde SIEMPRE con el JSON completo aunque el documento sea dificil de leer; nunca respondas con una disculpa. Si un campo es ilegible o no aparece, usa "" en ese campo, sin inventar.`,
 };
 
+// Se le pide ademas a la IA que diga que documento es REALMENTE: si en la
+// casilla de un tipo se adjunta otro (ej. una poliza en la casilla
+// "Contrato"), sus datos NO se usan para llenar el formulario -- antes eso
+// reemplazaba el numero de contrato/objeto/valor con los de la poliza.
+const TIPOS_DOCUMENTO_INFORME_ = ["acta_inicio", "polizas", "contrato", "comprobante_anticipo", "designacion_supervision"];
+const INSTRUCCION_TIPO_DETECTADO_ = `\n\nAdemas, agrega al JSON el campo "tipoDetectado" con lo que el documento REALMENTE es, uno de: "acta_inicio", "polizas" (una poliza de seguro o su aprobacion), "contrato", "comprobante_anticipo" (cuenta de cobro o comprobante de pago del anticipo), "designacion_supervision", "otro".`;
+
 // Un campo por tipo que, si viene lleno (o hay al menos un amparo), se
 // considera que la lectura "sirvio" -- si ni siquiera eso vino, se
 // reintenta con el modelo mas grande antes de rendirse.
 function extraccionEsUtil_(tipo, extraido) {
   if (!extraido) return false;
-  if (tipo === "polizas") return Array.isArray(extraido.amparos) && extraido.amparos.length > 0 || !!extraido.polizaCumplimiento;
+  // Polizas: no basta con los nombres de los amparos (Haiku a veces solo
+  // lee tipo y %), tiene que venir al menos un valor asegurado.
+  if (tipo === "polizas") return Array.isArray(extraido.amparos) && extraido.amparos.some((a) => Number(a.valorAsegurado) > 0);
   if (tipo === "comprobante_anticipo") return Number(extraido.valorAnticipo) > 0;
   if (tipo === "designacion_supervision") return !!(extraido.supervisorDesignacion || extraido.supervisorCargo);
   return !!(extraido.numeroContrato || extraido.contratista || extraido.objeto);
 }
 
 async function leerDocumentoInformeConIA_(tipo, base64Data, mediaType) {
-  const prompt = PROMPT_POR_TIPO_DOCUMENTO[tipo];
-  if (!prompt) return { extraido: null, necesitaRevision: false };
+  const promptBase = PROMPT_POR_TIPO_DOCUMENTO[tipo];
+  if (!promptBase) return { extraido: null, necesitaRevision: false };
+  const prompt = promptBase + INSTRUCCION_TIPO_DETECTADO_;
   const esPdf = (mediaType || "").indexOf("pdf") !== -1;
   const bloqueArchivo = esPdf
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
     : { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64Data } };
 
-  const intentos = [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
+  // Las aprobaciones de polizas son tablas escaneadas (a veces giradas) que
+  // Haiku lee a medias: van directo al modelo grande.
+  const intentos = tipo === "polizas" ? [CLAUDE_MODEL_REINTENTO, CLAUDE_MODEL] : [CLAUDE_MODEL, CLAUDE_MODEL_REINTENTO];
   let ultimoExtraido = null;
   for (let i = 0; i < intentos.length; i++) {
     try {
       const message = await anthropic.messages.create({
         model: intentos[i],
-        max_tokens: 1200,
+        max_tokens: 2000,
         messages: [{ role: "user", content: [bloqueArchivo, { type: "text", text: prompt }] }],
       });
       const textBlock = message.content.find((b) => b.type === "text");
       const jsonMatch = textBlock && textBlock.text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const extraido = JSON.parse(jsonMatch[0]);
+        const detectado = extraido.tipoDetectado;
+        delete extraido.tipoDetectado;
+        if (detectado && detectado !== tipo && TIPOS_DOCUMENTO_INFORME_.includes(detectado)) {
+          return { extraido: null, necesitaRevision: false, tipoDetectado: detectado };
+        }
         ultimoExtraido = extraido;
         if (extraccionEsUtil_(tipo, extraido)) return { extraido, necesitaRevision: false };
       }
@@ -341,6 +358,9 @@ async function generarTextoConIA_(prompt, maxTokens) {
 // completar a mano en vez de dejar la seccion vacia o romper la
 // generacion del informe.
 async function generarDescripcionNecesidad_(objeto) {
+  // Sin objeto la IA responde pidiendolo ("No he recibido el objeto...") y
+  // ese texto terminaba impreso en el informe.
+  if (!String(objeto || "").trim()) return "[Agregar aquí la descripción de la necesidad que da origen al proyecto y lo que se soluciona con su ejecución.]";
   const prompt = `Eres un ingeniero que redacta informes de obra pública en Colombia. Con base UNICAMENTE en el siguiente objeto contractual, escribe una descripción de la necesidad, EXTENSA Y DETALLADA (aproximadamente una página, entre 500 y 700 palabras, en 3 a 5 párrafos separados por una línea en blanco entre cada uno), que cubra: el problema o la situación que dio origen al proyecto, el contexto y las condiciones que hacían necesaria esta intervención, y qué se soluciona concretamente con la ejecución de las obras. No uses título ni viñetas -- solo párrafos de texto corrido. Sé técnico y concreto; no inventes cifras, fechas, nombres de barrios/sectores específicos ni datos que no se puedan inferir razonablemente del objeto -- puedes desarrollar el contexto tecnico/sanitario/de infraestructura de forma general sin inventar hechos puntuales no mencionados.\n\nObjeto del contrato: "${objeto || ""}"`;
   const texto = await generarTextoConIA_(prompt, 1600);
   // A veces el modelo agrega un titulo markdown ("# Descripcion de la
@@ -398,6 +418,19 @@ async function generarDescripcionesActividades_(items) {
   return items.map((it) => Object.assign({}, it, { descripcionEjecucion: it.descripcion }));
 }
 
+// El numero de contrato sale siempre de la obra (viene del presupuesto con
+// el que se creo, ej. "085-26") -- el del formulario se puede contaminar si
+// la IA lee otro documento. Objeto y contratista se toman de la obra solo
+// si el formulario no los tiene, para que el informe nunca salga vacio.
+function completarDatosDesdeObra_(datos, obra) {
+  if (!obra) return;
+  const m = /(\d+\s*-\s*\d+)/.exec(String(obra.numeroContrato || ""));
+  if (m) datos.numeroContrato = m[1].replace(/\s/g, "");
+  else if (!datos.numeroContrato && obra.numeroContrato) datos.numeroContrato = String(obra.numeroContrato);
+  if (!datos.objeto && obra.objeto) datos.objeto = obra.objeto;
+  if (!datos.contratista && obra.contratista) datos.contratista = obra.contratista;
+}
+
 // ---------- Informe de Supervision (AP2-FO-024) ----------
 
 app.get("/api/obras/:obraId/informe-supervision", async (req, res) => {
@@ -444,7 +477,7 @@ app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("arc
     ]);
 
     if (!subida.ok) return res.status(502).json({ error: subida.error || "No se pudo guardar el archivo" });
-    res.json({ ok: true, url: subida.url, campo: subida.campo, extraido: lectura.extraido, necesitaRevision: lectura.necesitaRevision });
+    res.json({ ok: true, url: subida.url, campo: subida.campo, extraido: lectura.extraido, necesitaRevision: lectura.necesitaRevision, tipoDetectado: lectura.tipoDetectado || "" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });
@@ -511,7 +544,13 @@ app.post("/api/obras/:obraId/informe-supervision/generar", async (req, res) => {
       fechaDesde, fechaHasta,
     });
 
-    const valorContrato = Number(datos.valorInicial) || 0;
+    completarDatosDesdeObra_(datos, datosObra && datosObra.obra);
+    // El valor del contrato sale del presupuesto de la obra (lo mismo que el
+    // "COSTO TOTAL OBRA" contratado de la hoja Ejecucion Real); el valor
+    // escrito en el formulario solo se usa si la obra no tiene presupuesto
+    // con precios.
+    const valorContrato = Number(resumen.totalContratadoVr) || Number(datos.valorInicial) || 0;
+    if (valorContrato) datos.valorInicial = valorContrato;
     const porcentajeAnticipo = Number(datos.porcentajeAnticipo) || 0;
     const valorAnticipoPagado = Number(datos.valorAnticipo) || 0;
     const valorActaPeriodo = resumen.totalEjecutadoPeriodoVr || 0;
@@ -605,7 +644,13 @@ app.post("/api/obras/:obraId/informe-supervision/generar-supervisor", async (req
       fechaDesde, fechaHasta,
     });
 
-    const valorContrato = Number(datos.valorInicial) || 0;
+    completarDatosDesdeObra_(datos, datosObra && datosObra.obra);
+    // El valor del contrato sale del presupuesto de la obra (lo mismo que el
+    // "COSTO TOTAL OBRA" contratado de la hoja Ejecucion Real); el valor
+    // escrito en el formulario solo se usa si la obra no tiene presupuesto
+    // con precios.
+    const valorContrato = Number(resumen.totalContratadoVr) || Number(datos.valorInicial) || 0;
+    if (valorContrato) datos.valorInicial = valorContrato;
     const porcentajeAnticipo = Number(datos.porcentajeAnticipo) || 0;
     const valorAnticipoPagado = Number(datos.valorAnticipo) || 0;
     const valorActaPeriodo = resumen.totalEjecutadoPeriodoVr || 0;

@@ -374,7 +374,7 @@ function mostrarToast(msg, esError) {
   toast.textContent = msg;
   toast.style.background = esError ? "#C0392B" : "var(--navy)";
   toast.style.display = "block";
-  setTimeout(() => { toast.style.display = "none"; }, 3200);
+  setTimeout(() => { toast.style.display = "none"; }, esError ? 6500 : 3200);
 }
 
 function formatoNumero(n) {
@@ -1669,7 +1669,10 @@ document.querySelectorAll(".inputAdjuntoInforme").forEach((input) => {
       if (!data.ok) throw new Error(data.error || "Error al subir el archivo");
       marcarAdjuntoCargado(tipo, data.url);
       const seLlenoAlgo = aplicarDatosExtraidos_(data.extraido);
-      if (data.necesitaRevision) {
+      if (data.tipoDetectado) {
+        const real = TIPO_A_ETIQUETA_ADJUNTO[data.tipoDetectado] || data.tipoDetectado;
+        mostrarToast(`Ojo: el archivo que adjuntaste en "${etiqueta}" parece ser ${real}. No se llenó ningún campo con él; adjúntalo en la casilla correcta.`, true);
+      } else if (data.necesitaRevision) {
         mostrarToast(`${etiqueta} adjuntado, pero la IA no pudo leerlo bien del todo -- revisa los campos`, true);
       } else if (seLlenoAlgo) {
         mostrarToast(`${etiqueta} adjuntado ✓ revisa los campos que se llenaron solos`);

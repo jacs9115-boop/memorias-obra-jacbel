@@ -266,7 +266,10 @@ function agruparAvancePorDireccion(items) {
   return ordenDireccion
     .map((direccion) => {
       const capitulos = Object.keys(porDireccion[direccion])
-        .filter((capitulo) => porDireccion[direccion][capitulo].vrContratado > 0)
+        // Tambien los capitulos con solo items agregados desde la app (sin
+        // cantidad contratada): si no, su ejecutado no aparecia en esta
+        // tabla pero si en el balance, y los totales no cuadraban.
+        .filter((capitulo) => porDireccion[direccion][capitulo].vrContratado > 0 || porDireccion[direccion][capitulo].vrEjecutado > 0)
         .map((capitulo) => {
           const c = porDireccion[direccion][capitulo];
           return { capitulo, vrContratado: c.vrContratado, vrEjecutado: c.vrEjecutado };
