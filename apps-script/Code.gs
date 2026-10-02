@@ -2350,7 +2350,8 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
   // vez de los capitulos de una sola -- se reutiliza tal cual la misma
   // logica de formulas (nivel 10-14 se procesan igual sin importar si
   // "_capRows" apunta a capitulos o a los TCD de cada direccion).
-  if (tcdRowsIdx.length) {
+  // Solo cuando hay varias direcciones: con una sola, repetiria su cierre.
+  if (tcdRowsIdx.length > 1) {
     filasFinal.push({ nivel: 0, direccion: "", item: "", descripcion: "RESUMEN GENERAL DE LA OBRA", und: "" });
     filasFinal.push({
       nivel: 10, direccion: "", item: "", descripcion: "TOTAL COSTOS DIRECTOS TCD", und: "",
@@ -2536,17 +2537,11 @@ function regenerarEjecucionReal_(ss, numeroContrato, totalPorItemClave) {
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 1) + "*0.304"; });
     } else if (f.nivel === 12) {
       // IMPREVISTOS (1% DEL TCD): 2 filas arriba (TOTAL COSTOS DIRECTOS TCD).
-      // Este usuario normalmente no ejecuta/cobra el 1% de imprevistos: el
-      // valor CONTRATADO (F) si sale al 1% del TCD (asi lo dice el
-      // contrato), pero lo ejecutado (Acta anterior H, Presente acta J,
-      // Acumulado L) siempre queda en 0 -- nunca se amortiza -- y el saldo
-      // (N) queda igual al valor contratado completo, en positivo.
+      // Este usuario no ejecuta/cobra el 1% de imprevistos: por pedido suyo
+      // va SOLO en SALDO / VR. TOTAL (N), calculado sobre el TCD contratado;
+      // las demas columnas de esta fila quedan vacias.
       var filaTCD12_ = row - 2;
-      dinamico[idx][COL.CVP] = "=" + colLetraEjecucionReal_(COL.CVP) + filaTCD12_ + "*0.01";
-      dinamico[idx][COL.AVR] = "0";
-      dinamico[idx][COL.PVR] = "0";
-      dinamico[idx][COL.TVR] = "0";
-      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + row;
+      dinamico[idx][COL.SVR] = "=" + colLetraEjecucionReal_(COL.CVP) + filaTCD12_ + "*0.01";
     } else if (f.nivel === 13) {
       // UTILIDAD (6% DEL TCD): 3 filas arriba (TOTAL COSTOS DIRECTOS TCD).
       COLS_FORMULA_AIU.forEach(function (c) { dinamico[idx][c] = "=" + colLetraEjecucionReal_(c) + (row - 3) + "*0.06"; });
