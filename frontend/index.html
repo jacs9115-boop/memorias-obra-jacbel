@@ -1630,15 +1630,12 @@ function aplicarDatosExtraidos_(extraido) {
     camposLlenados++;
   });
   if (Array.isArray(extraido.amparos) && extraido.amparos.length) {
-    leerAmparosDesdeFormulario();
-    const yaExisten = amparosActuales.map((a) => JSON.stringify(a));
-    extraido.amparos.forEach((a) => {
-      const nuevo = {
-        tipo: a.tipo || "", porcentaje: a.porcentaje || "", valorAsegurado: a.valorAsegurado || "",
-        vigenciaDesde: a.vigenciaDesde || "", vigenciaHasta: a.vigenciaHasta || "",
-      };
-      if (yaExisten.indexOf(JSON.stringify(nuevo)) === -1) amparosActuales.push(nuevo);
-    });
+    // La Aprobacion de Polizas es la fuente de los amparos: reemplaza los
+    // anteriores en vez de sumarse a ellos.
+    amparosActuales = extraido.amparos.map((a) => ({
+      tipo: a.tipo || "", porcentaje: a.porcentaje || "", valorAsegurado: a.valorAsegurado || "",
+      vigenciaDesde: a.vigenciaDesde || "", vigenciaHasta: a.vigenciaHasta || "",
+    }));
     renderAmparos();
     camposLlenados++;
   }
@@ -1674,6 +1671,10 @@ document.querySelectorAll(".inputAdjuntoInforme").forEach((input) => {
         mostrarToast(`Ojo: el archivo que adjuntaste en "${etiqueta}" parece ser ${real}. No se llenó ningún campo con él; adjúntalo en la casilla correcta.`, true);
       } else if (data.necesitaRevision) {
         mostrarToast(`${etiqueta} adjuntado, pero la IA no pudo leerlo bien del todo -- revisa los campos`, true);
+      } else if (tipo === "contrato") {
+        mostrarToast("Contrato adjuntado ✓ (queda como respaldo; los datos del contrato se toman del Acta de Inicio)");
+      } else if (seLlenoAlgo && data.guardado) {
+        mostrarToast(`${etiqueta} adjuntado ✓ datos leídos y guardados — revísalos`);
       } else if (seLlenoAlgo) {
         mostrarToast(`${etiqueta} adjuntado ✓ revisa los campos que se llenaron solos`);
       } else {

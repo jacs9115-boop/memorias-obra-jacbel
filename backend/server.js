@@ -276,6 +276,18 @@ Reglas: junta el numero y la fecha del memorando en un solo texto para "supervis
 // casilla de un tipo se adjunta otro (ej. una poliza en la casilla
 // "Contrato"), sus datos NO se usan para llenar el formulario -- antes eso
 // reemplazaba el numero de contrato/objeto/valor con los de la poliza.
+// Que datos del informe salen de cada documento: los del contrato SOLO del
+// Acta de Inicio y los de polizas SOLO de la Aprobacion de Polizas. El
+// contrato adjunto queda solo como respaldo (no llena nada). Al adjuntar,
+// estos campos se guardan de una vez en la hoja de la obra.
+const CAMPOS_POR_DOCUMENTO_ = {
+  acta_inicio: ["numeroContrato", "objeto", "contratista", "valorInicial", "plazo", "fechaActaInicio", "fechaTerminacionInicial"],
+  polizas: ["polizaCumplimiento", "polizaResponsabilidadCivil", "companiaAseguradora"],
+  comprobante_anticipo: ["valorAnticipo", "porcentajeAnticipo"],
+  designacion_supervision: ["supervisorDesignacion", "supervisorCargo"],
+  contrato: [],
+};
+
 const TIPOS_DOCUMENTO_INFORME_ = ["acta_inicio", "polizas", "contrato", "comprobante_anticipo", "designacion_supervision"];
 const INSTRUCCION_TIPO_DETECTADO_ = `\n\nAdemas, agrega al JSON el campo "tipoDetectado" con lo que el documento REALMENTE es, uno de: "acta_inicio", "polizas" (una poliza de seguro o su aprobacion), "contrato", "comprobante_anticipo" (cuenta de cobro o comprobante de pago del anticipo), "designacion_supervision", "otro".`;
 
@@ -470,14 +482,35 @@ app.post("/api/obras/:obraId/informe-supervision/documentos", upload.single("arc
     // falla o tarda, el archivo igual queda guardado (no dependen una de
     // la otra).
     const [lectura, subida] = await Promise.all([
-      leerDocumentoInformeConIA_(tipo, base64, mime),
+      tipo === "contrato" ? Promise.resolve({ extraido: null, necesitaRevision: false }) : leerDocumentoInformeConIA_(tipo, base64, mime),
       llamarAppsScriptPost({
         accion: "subir_documento_informe", obraId: req.params.obraId, tipo, base64, mime, nombre: req.file.originalname,
       }),
     ]);
 
     if (!subida.ok) return res.status(502).json({ error: subida.error || "No se pudo guardar el archivo" });
-    res.json({ ok: true, url: subida.url, campo: subida.campo, extraido: lectura.extraido, necesitaRevision: lectura.necesitaRevision, tipoDetectado: lectura.tipoDetectado || "" });
+
+    // Solo los campos que le corresponden a este documento, y solo los que
+    // la IA si leyo (un campo vacio no borra lo que ya estaba guardado).
+    let extraido = null;
+    let guardado = false;
+    if (lectura.extraido) {
+      extraido = {};
+      (CAMPOS_POR_DOCUMENTO_[tipo] || []).forEach((campo) => {
+        const v = lectura.extraido[campo];
+        if (v !== undefined && v !== null && v !== "" && v !== 0) extraido[campo] = v;
+      });
+      const amparos = tipo === "polizas" && Array.isArray(lectura.extraido.amparos) && lectura.extraido.amparos.length
+        ? lectura.extraido.amparos : null;
+      if (amparos) extraido.amparos = amparos;
+      if (Object.keys(extraido).length) {
+        const datosGuardar = Object.assign({}, extraido);
+        delete datosGuardar.amparos;
+        const r = await llamarAppsScriptPost({ accion: "guardar_datos_informe", obraId: req.params.obraId, datos: datosGuardar, amparos: amparos || undefined });
+        guardado = !!(r && r.ok);
+      }
+    }
+    res.json({ ok: true, url: subida.url, campo: subida.campo, extraido, guardado, necesitaRevision: lectura.necesitaRevision, tipoDetectado: lectura.tipoDetectado || "" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "Error inesperado" });
